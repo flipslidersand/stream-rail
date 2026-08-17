@@ -3,33 +3,52 @@ package engine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/flipslidersand/stream-rail/internal/model"
+	"github.com/flipslidersand/stream-rail/internal/window"
 )
 
-// Engine はイベントチャンネルを読み続けるパイプライン骨組み。
-// Phase 2 以降で集計・アラートロジックを追加する。
+// Engine wires the pipeline stages together. Phase 2 adds tumbling-window
+// bucketing between ingestion and (future) aggregation.
 type Engine struct {
-	in <-chan model.Event
+	in         <-chan model.Event
+	windowSize time.Duration
 }
 
-func New(in <-chan model.Event) *Engine {
-	return &Engine{in: in}
+// New builds an Engine reading from in. windowSize is the tumbling window
+// duration; if zero it defaults to 5 minutes (the spec's example window).
+func New(in <-chan model.Event, windowSize time.Duration) *Engine {
+	if windowSize <= 0 {
+		windowSize = 5 * time.Minute
+	}
+	return &Engine{in: in, windowSize: windowSize}
 }
 
-// Run はコンテキストがキャンセルされるまでイベントを消費する。
+// Run drives the window manager and consumes closed windows until ctx is
+// cancelled. Phase 3 replaces the batch logging with aggregation + rules.
 func (e *Engine) Run(ctx context.Context) error {
+	batchCh := make(chan window.Batch, window.DefaultBatchBuffer)
+	mgr := window.NewManager(e.windowSize, e.in, batchCh, nil, nil)
+
+	go func() {
+		_ = mgr.Run(ctx)
+		close(batchCh)
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case ev, ok := <-e.in:
+		case batch, ok := <-batchCh:
 			if !ok {
 				return nil
 			}
-			// Phase 2: ウィンドウ集計・ルール評価をここに追加
-			fmt.Printf("[engine] received: service=%s level=%s ts=%d\n",
-				ev.Service, ev.Level, ev.Timestamp)
+			fmt.Printf("[window] closed group=%s start=%s end=%s count=%d\n",
+				batch.Key.GroupKey,
+				batch.Key.WindowStart.Format(time.RFC3339),
+				batch.WindowEnd.Format(time.RFC3339),
+				batch.Count)
 		}
 	}
 }
