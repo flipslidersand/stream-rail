@@ -39,13 +39,18 @@ func (c *Console) Emit(r rule.Rule, res aggregator.Result) bool {
 	if groupBy == "" {
 		groupBy = "group"
 	}
-	fmt.Fprintf(c.out, "[ALERT] rule=%s %s=%s %s=%s %s %s (%s-%s)\n",
+	suffix := ""
+	if res.Corrected {
+		suffix = " (corrected)"
+	}
+	fmt.Fprintf(c.out, "[ALERT] rule=%s %s=%s %s=%s %s %s (%s-%s)%s\n",
 		r.Name,
 		groupBy, res.Key.GroupKey,
 		r.AggFunc, formatNum(res.Value),
 		r.Having.Symbol(), formatNum(r.Having.Value),
 		res.Key.WindowStart.Format("15:04"),
 		res.WindowEnd.Format("15:04"),
+		suffix,
 	)
 	return true
 }
