@@ -25,16 +25,18 @@ func main() {
 	var addr string
 	var windowSize time.Duration
 	var threshold float64
+	var configPath string
 	run := &cobra.Command{
 		Use:   "run",
 		Short: "Start the stream processing engine",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServer(addr, windowSize, threshold)
+			return runServer(addr, windowSize, threshold, configPath)
 		},
 	}
 	run.Flags().StringVar(&addr, "addr", ":8080", "listen address")
-	run.Flags().DurationVar(&windowSize, "window", 5*time.Minute, "tumbling window size")
-	run.Flags().Float64Var(&threshold, "threshold", 20, "error-spike alert threshold (count > N)")
+	run.Flags().DurationVar(&windowSize, "window", 5*time.Minute, "default tumbling window size (rules without window.size)")
+	run.Flags().Float64Var(&threshold, "threshold", 20, "built-in error-spike threshold (used when --config is unset)")
+	run.Flags().StringVar(&configPath, "config", "", "path to rules.yaml (falls back to built-in error-spike rule if unset)")
 	root.AddCommand(run)
 
 	if err := root.Execute(); err != nil {
@@ -42,20 +44,13 @@ func main() {
 	}
 }
 
-func runServer(addr string, windowSize time.Duration, threshold float64) error {
+func runServer(addr string, windowSize time.Duration, threshold float64, configPath string) error {
+	rules, err := loadRules(configPath, threshold)
+	if err != nil {
+		return err
+	}
+
 	ch := make(chan model.Event, 1024)
-
-	// Phase 3 ships a single built-in rule. Phase-later work loads these from
-	// rules.yaml (see docs/spec.md).
-	rules := []rule.Rule{{
-		Name:    "error-spike",
-		Filter:  rule.Filter{Field: "level", Eq: "ERROR"},
-		GroupBy: "service",
-		AggFunc: rule.AggCount,
-		Having:  rule.Having{Op: rule.OpGT, Value: threshold},
-		Emit:    "console",
-	}}
-
 	ing := ingester.NewHTTPIngester(ch)
 	eng := engine.New(ch, windowSize, rules, nil)
 
@@ -78,9 +73,30 @@ func runServer(addr string, windowSize time.Duration, threshold float64) error {
 		}
 	}()
 
-	fmt.Printf("streamrail listening on %s\n", addr)
+	fmt.Printf("streamrail listening on %s (%d rule(s))\n", addr, len(rules))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil
+}
+
+// loadRules returns rules from configPath, or the built-in error-spike rule
+// when configPath is empty.
+func loadRules(configPath string, threshold float64) ([]rule.Rule, error) {
+	if configPath != "" {
+		rules, err := rule.LoadFile(configPath)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Printf("loaded %d rule(s) from %s\n", len(rules), configPath)
+		return rules, nil
+	}
+	return []rule.Rule{{
+		Name:    "error-spike",
+		Filter:  rule.Filter{Field: "level", Eq: "ERROR"},
+		GroupBy: "service",
+		AggFunc: rule.AggCount,
+		Having:  rule.Having{Op: rule.OpGT, Value: threshold},
+		Emit:    "console",
+	}}, nil
 }

@@ -1,0 +1,17 @@
+# Example StreamRail rules. Run with:
+#   streamrail run --config examples/rules.yaml
+rules:
+  - name: error-spike
+    source: application_logs
+    window:
+      type: tumbling
+      size: 5m
+    filter:
+      field: level
+      eq: ERROR
+    group_by: service
+    aggregate:
+      func: count
+    having:
+      gt: 20
+    emit: console
