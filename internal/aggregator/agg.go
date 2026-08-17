@@ -16,6 +16,7 @@ type Result struct {
 	WindowEnd time.Time
 	Count     int64   // number of events that passed the filter
 	Value     float64 // the aggregated value (count or sum) checked by HAVING
+	Corrected bool    // re-emission triggered by a late event
 }
 
 // Aggregate applies r's filter to the batch events and computes COUNT or SUM.
@@ -34,7 +35,7 @@ func Aggregate(b window.Batch, r rule.Rule) Result {
 		}
 	}
 
-	res := Result{Key: b.Key, WindowEnd: b.WindowEnd, Count: count}
+	res := Result{Key: b.Key, WindowEnd: b.WindowEnd, Count: count, Corrected: b.Corrected}
 	if r.AggFunc == rule.AggSum {
 		res.Value = sum
 	} else {

@@ -22,6 +22,7 @@ import (
 type Engine struct {
 	in            <-chan model.Event
 	defaultWindow time.Duration
+	lateness      time.Duration
 	rules         []rule.Rule
 	console       *notifier.Console
 	store         window.StoreFactory // optional; nil disables persistence
@@ -41,6 +42,12 @@ func New(in <-chan model.Event, defaultWindow time.Duration, rules []rule.Rule, 
 		console:       notifier.NewConsole(out),
 		store:         store,
 	}
+}
+
+// WithLateness sets the allowed lateness for late-event correction (Phase 6).
+func (e *Engine) WithLateness(d time.Duration) *Engine {
+	e.lateness = d
+	return e
 }
 
 // taggedBatch carries a closed window together with the rules that apply to it.
@@ -78,6 +85,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		in := make(chan model.Event, 1024)
 		out := make(chan window.Batch, window.DefaultBatchBuffer)
 		mgr := window.NewManager(size, in, out, nil, nil)
+		mgr.SetLateness(e.lateness)
 		rules := rules // capture per iteration
 
 		if e.store != nil {

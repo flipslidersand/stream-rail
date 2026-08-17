@@ -27,6 +27,7 @@ type runConfig struct {
 	dataDir     string
 	natsURL     string
 	natsSubject string
+	lateness    time.Duration
 }
 
 func main() {
@@ -50,6 +51,7 @@ func main() {
 	run.Flags().StringVar(&cfg.dataDir, "data", "", "BadgerDB directory for window state persistence (empty = in-memory only)")
 	run.Flags().StringVar(&cfg.natsURL, "nats", "", "NATS server URL for JetStream ingestion (e.g. nats://localhost:4222; empty = HTTP only)")
 	run.Flags().StringVar(&cfg.natsSubject, "nats-subject", "application_logs", "NATS JetStream subject/stream to consume")
+	run.Flags().DurationVar(&cfg.lateness, "lateness", 0, "allowed lateness for late-event correction (0 = disabled)")
 	root.AddCommand(run)
 
 	if err := root.Execute(); err != nil {
@@ -79,7 +81,7 @@ func runServer(cfg runConfig) error {
 
 	ch := make(chan model.Event, 1024)
 	ing := ingester.NewHTTPIngester(ch)
-	eng := engine.New(ch, cfg.windowSize, rules, nil, storeFactory)
+	eng := engine.New(ch, cfg.windowSize, rules, nil, storeFactory).WithLateness(cfg.lateness)
 
 	// Optional NATS JetStream ingester, feeding the same event channel.
 	if cfg.natsURL != "" {
