@@ -1,0 +1,30 @@
+# Binaries
+/streamrail
+*.exe
+*.out
+
+# Test / coverage
+*.test
+coverage.out
+coverage.html
+
+# BadgerDB / runtime data (--data)
+/data/
+*.badger/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.tmp
+.DS_Store
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.secret
