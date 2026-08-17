@@ -18,29 +18,38 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// runConfig holds the resolved flags for the run command.
+type runConfig struct {
+	addr        string
+	windowSize  time.Duration
+	threshold   float64
+	configPath  string
+	dataDir     string
+	natsURL     string
+	natsSubject string
+}
+
 func main() {
 	root := &cobra.Command{
 		Use:   "streamrail",
 		Short: "Real-time stream processing engine",
 	}
 
-	var addr string
-	var windowSize time.Duration
-	var threshold float64
-	var configPath string
-	var dataDir string
+	var cfg runConfig
 	run := &cobra.Command{
 		Use:   "run",
 		Short: "Start the stream processing engine",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServer(addr, windowSize, threshold, configPath, dataDir)
+			return runServer(cfg)
 		},
 	}
-	run.Flags().StringVar(&addr, "addr", ":8080", "listen address")
-	run.Flags().DurationVar(&windowSize, "window", 5*time.Minute, "default tumbling window size (rules without window.size)")
-	run.Flags().Float64Var(&threshold, "threshold", 20, "built-in error-spike threshold (used when --config is unset)")
-	run.Flags().StringVar(&configPath, "config", "", "path to rules.yaml (falls back to built-in error-spike rule if unset)")
-	run.Flags().StringVar(&dataDir, "data", "", "BadgerDB directory for window state persistence (empty = in-memory only)")
+	run.Flags().StringVar(&cfg.addr, "addr", ":8080", "listen address")
+	run.Flags().DurationVar(&cfg.windowSize, "window", 5*time.Minute, "default tumbling window size (rules without window.size)")
+	run.Flags().Float64Var(&cfg.threshold, "threshold", 20, "built-in error-spike threshold (used when --config is unset)")
+	run.Flags().StringVar(&cfg.configPath, "config", "", "path to rules.yaml (falls back to built-in error-spike rule if unset)")
+	run.Flags().StringVar(&cfg.dataDir, "data", "", "BadgerDB directory for window state persistence (empty = in-memory only)")
+	run.Flags().StringVar(&cfg.natsURL, "nats", "", "NATS server URL for JetStream ingestion (e.g. nats://localhost:4222; empty = HTTP only)")
+	run.Flags().StringVar(&cfg.natsSubject, "nats-subject", "application_logs", "NATS JetStream subject/stream to consume")
 	root.AddCommand(run)
 
 	if err := root.Execute(); err != nil {
@@ -48,34 +57,43 @@ func main() {
 	}
 }
 
-func runServer(addr string, windowSize time.Duration, threshold float64, configPath, dataDir string) error {
-	rules, err := loadRules(configPath, threshold)
+func runServer(cfg runConfig) error {
+	rules, err := loadRules(cfg.configPath, cfg.threshold)
 	if err != nil {
 		return err
 	}
 
 	var storeFactory window.StoreFactory
-	if dataDir != "" {
-		db, err := store.Open(dataDir)
+	if cfg.dataDir != "" {
+		db, err := store.Open(cfg.dataDir)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = db.Close() }()
 		storeFactory = db
-		fmt.Printf("persisting window state to %s\n", dataDir)
+		fmt.Printf("persisting window state to %s\n", cfg.dataDir)
 	}
-
-	ch := make(chan model.Event, 1024)
-	ing := ingester.NewHTTPIngester(ch)
-	eng := engine.New(ch, windowSize, rules, nil, storeFactory)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	ch := make(chan model.Event, 1024)
+	ing := ingester.NewHTTPIngester(ch)
+	eng := engine.New(ch, cfg.windowSize, rules, nil, storeFactory)
+
+	// Optional NATS JetStream ingester, feeding the same event channel.
+	if cfg.natsURL != "" {
+		ni := ingester.NewNATS(cfg.natsURL, cfg.natsSubject, ch)
+		if err := ni.Start(ctx); err != nil {
+			return err
+		}
+		defer ni.Stop()
+		fmt.Printf("consuming NATS JetStream %s from %s\n", cfg.natsSubject, cfg.natsURL)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/events", ing)
-
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{Addr: cfg.addr, Handler: mux}
 
 	go func() {
 		<-ctx.Done()
@@ -88,7 +106,7 @@ func runServer(addr string, windowSize time.Duration, threshold float64, configP
 		}
 	}()
 
-	fmt.Printf("streamrail listening on %s (%d rule(s))\n", addr, len(rules))
+	fmt.Printf("streamrail listening on %s (%d rule(s))\n", cfg.addr, len(rules))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
