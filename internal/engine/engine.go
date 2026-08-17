@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 
@@ -23,12 +24,13 @@ type Engine struct {
 	defaultWindow time.Duration
 	rules         []rule.Rule
 	console       *notifier.Console
+	store         window.StoreFactory // optional; nil disables persistence
 }
 
 // New builds an Engine reading from in. defaultWindow is applied to rules that
 // don't declare their own window size (defaults to 5 minutes). out receives
-// alert output (nil = os.Stdout).
-func New(in <-chan model.Event, defaultWindow time.Duration, rules []rule.Rule, out io.Writer) *Engine {
+// alert output (nil = os.Stdout). store may be nil to disable persistence.
+func New(in <-chan model.Event, defaultWindow time.Duration, rules []rule.Rule, out io.Writer, store window.StoreFactory) *Engine {
 	if defaultWindow <= 0 {
 		defaultWindow = 5 * time.Minute
 	}
@@ -37,6 +39,7 @@ func New(in <-chan model.Event, defaultWindow time.Duration, rules []rule.Rule, 
 		defaultWindow: defaultWindow,
 		rules:         rules,
 		console:       notifier.NewConsole(out),
+		store:         store,
 	}
 }
 
@@ -76,6 +79,15 @@ func (e *Engine) Run(ctx context.Context) error {
 		out := make(chan window.Batch, window.DefaultBatchBuffer)
 		mgr := window.NewManager(size, in, out, nil, nil)
 		rules := rules // capture per iteration
+
+		if e.store != nil {
+			mgr.SetStore(e.store.Buckets(size.String()))
+			if n, err := mgr.Restore(); err != nil {
+				return fmt.Errorf("restore windows (size=%s): %w", size, err)
+			} else if n > 0 {
+				fmt.Printf("[store] restored %d open window(s) for size=%s\n", n, size)
+			}
+		}
 
 		go func() { _ = mgr.Run(ctx) }()
 		go func() {
