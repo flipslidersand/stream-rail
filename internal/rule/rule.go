@@ -7,6 +7,7 @@ package rule
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/flipslidersand/stream-rail/internal/model"
 )
@@ -40,13 +41,14 @@ type Having struct {
 
 // Rule is a single alerting rule.
 type Rule struct {
-	Name     string
-	Filter   Filter
-	GroupBy  string
-	AggFunc  string // AggCount | AggSum
-	AggField string // numeric field name, required for AggSum
-	Having   Having
-	Emit     string // "console" for Phase 3
+	Name       string
+	Filter     Filter
+	GroupBy    string
+	AggFunc    string        // AggCount | AggSum
+	AggField   string        // numeric field name, required for AggSum
+	Having     Having
+	Emit       string        // "console" for Phase 3
+	WindowSize time.Duration // tumbling window size; 0 = engine default
 }
 
 // Match reports whether ev passes the rule's filter.
