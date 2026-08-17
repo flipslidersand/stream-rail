@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/flipslidersand/stream-rail/internal/engine"
 	"github.com/flipslidersand/stream-rail/internal/ingester"
@@ -21,14 +22,16 @@ func main() {
 	}
 
 	var addr string
+	var windowSize time.Duration
 	run := &cobra.Command{
 		Use:   "run",
 		Short: "Start the stream processing engine",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServer(addr)
+			return runServer(addr, windowSize)
 		},
 	}
 	run.Flags().StringVar(&addr, "addr", ":8080", "listen address")
+	run.Flags().DurationVar(&windowSize, "window", 5*time.Minute, "tumbling window size")
 	root.AddCommand(run)
 
 	if err := root.Execute(); err != nil {
@@ -36,11 +39,11 @@ func main() {
 	}
 }
 
-func runServer(addr string) error {
+func runServer(addr string, windowSize time.Duration) error {
 	ch := make(chan model.Event, 1024)
 
 	ing := ingester.NewHTTPIngester(ch)
-	eng := engine.New(ch)
+	eng := engine.New(ch, windowSize)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
