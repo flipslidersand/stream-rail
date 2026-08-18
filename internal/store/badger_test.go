@@ -56,6 +56,48 @@ func TestBadger_SaveLoadDelete(t *testing.T) {
 	}
 }
 
+func TestBadger_CheckpointRoundTrip(t *testing.T) {
+	db := openTemp(t)
+	s := db.Buckets("5m0s")
+
+	// No checkpoint yet.
+	if _, found, err := s.LoadCheckpoint(); err != nil || found {
+		t.Fatalf("LoadCheckpoint (empty) = found=%v err=%v, want false,nil", found, err)
+	}
+
+	if err := s.SaveCheckpoint(1_717_000_000); err != nil {
+		t.Fatalf("SaveCheckpoint: %v", err)
+	}
+	got, found, err := s.LoadCheckpoint()
+	if err != nil || !found || got != 1_717_000_000 {
+		t.Fatalf("LoadCheckpoint = %d,%v,%v want 1717000000,true,nil", got, found, err)
+	}
+
+	// Overwrite.
+	if err := s.SaveCheckpoint(1_717_000_500); err != nil {
+		t.Fatalf("SaveCheckpoint overwrite: %v", err)
+	}
+	got, _, _ = s.LoadCheckpoint()
+	if got != 1_717_000_500 {
+		t.Fatalf("after overwrite = %d, want 1717000500", got)
+	}
+}
+
+func TestBadger_CheckpointNamespacedByPrefix(t *testing.T) {
+	db := openTemp(t)
+	if err := db.Buckets("5m0s/service").SaveCheckpoint(100); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Buckets("5m0s/host").SaveCheckpoint(200); err != nil {
+		t.Fatal(err)
+	}
+	svc, _, _ := db.Buckets("5m0s/service").LoadCheckpoint()
+	host, _, _ := db.Buckets("5m0s/host").LoadCheckpoint()
+	if svc != 100 || host != 200 {
+		t.Fatalf("checkpoints collided: service=%d host=%d", svc, host)
+	}
+}
+
 func TestBadger_NamespacesByPrefix(t *testing.T) {
 	db := openTemp(t)
 	start := time.Date(2024, 6, 10, 10, 0, 0, 0, time.UTC)

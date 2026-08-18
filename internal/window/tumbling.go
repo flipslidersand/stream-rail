@@ -26,11 +26,15 @@ type Key struct {
 	WindowStart time.Time
 }
 
-// Bucket accumulates the events that fall into one window.
+// Bucket accumulates the events that fall into one window. Closed marks a
+// window that has already been flushed downstream but is retained for the
+// lateness horizon; persisting it lets a restart distinguish still-open windows
+// from ones that must not be re-emitted (Phase 6 / #18).
 type Bucket struct {
 	Key    Key
 	Events []model.Event
 	Count  int64
+	Closed bool
 }
 
 // Batch is a closed window emitted downstream to the aggregator. Corrected is
@@ -51,12 +55,18 @@ type GroupFunc func(model.Event) string
 // GroupByService is the default grouping used until rules are wired in.
 func GroupByService(ev model.Event) string { return ev.Service }
 
-// Store persists open window buckets so in-progress aggregation survives a
-// restart (Phase 4). Implemented by internal/store on top of BadgerDB.
+// Store persists window buckets so in-progress aggregation survives a restart
+// (Phase 4), plus the event-time watermark so event-time progress continues
+// across restarts (Phase 6 / #18). Implemented by internal/store on BadgerDB.
 type Store interface {
-	Save(b *Bucket) error        // upsert an open bucket
-	Delete(k Key) error          // remove a closed/flushed bucket
-	LoadAll() ([]*Bucket, error) // load all open buckets at startup
+	Save(b *Bucket) error        // upsert a bucket (open or retained-closed)
+	Delete(k Key) error          // remove a flushed/GC'd bucket
+	LoadAll() ([]*Bucket, error) // load all persisted buckets at startup
+
+	// SaveCheckpoint persists the manager's watermark (max event timestamp seen,
+	// unix seconds). LoadCheckpoint returns it, with found=false when none exists.
+	SaveCheckpoint(maxTS int64) error
+	LoadCheckpoint() (maxTS int64, found bool, err error)
 }
 
 // StoreFactory produces a namespaced Store per window size, so buckets from
@@ -110,20 +120,34 @@ func (m *Manager) SetStore(s Store) { m.store = s }
 // correction (a closed window is dropped immediately).
 func (m *Manager) SetLateness(d time.Duration) { m.lateness = d }
 
-// Restore loads any open window buckets left over from a previous run, so
-// in-progress aggregation resumes after a restart. Returns the count restored.
+// Restore loads window buckets and the watermark left over from a previous run,
+// so both in-progress aggregation and event-time progress resume after a
+// restart. Buckets flushed before the crash are restored into the retained
+// (closed) set so they are not re-emitted, while still-open buckets resume
+// accumulating. Returns the count of open windows restored.
 func (m *Manager) Restore() (int, error) {
 	if m.store == nil {
 		return 0, nil
+	}
+	if maxTS, found, err := m.store.LoadCheckpoint(); err != nil {
+		return 0, err
+	} else if found {
+		m.maxTS = maxTS
 	}
 	buckets, err := m.store.LoadAll()
 	if err != nil {
 		return 0, err
 	}
+	open := 0
 	for _, b := range buckets {
+		if b.Closed {
+			m.closed[b.Key] = b
+			continue
+		}
 		m.windows[b.Key] = b
+		open++
 	}
-	return len(buckets), nil
+	return open, nil
 }
 
 // Run consumes events until ctx is cancelled. A ticker fires every window size
@@ -167,6 +191,9 @@ func (m *Manager) windowEnd(k Key) time.Time { return k.WindowStart.Add(m.size) 
 func (m *Manager) add(ev model.Event) {
 	if ev.Timestamp > m.maxTS {
 		m.maxTS = ev.Timestamp
+		if m.store != nil {
+			_ = m.store.SaveCheckpoint(m.maxTS) // best-effort watermark durability
+		}
 	}
 	start := time.Unix(ev.Timestamp, 0).UTC().Truncate(m.size)
 	key := Key{GroupKey: m.groupBy(ev), WindowStart: start}
@@ -185,7 +212,7 @@ func (m *Manager) add(ev model.Event) {
 	case m.windowEnd(key).Unix() <= m.watermarkUnix():
 		// Late event for a window we never held open (already past watermark):
 		// materialize it in the closed set and emit as a correction.
-		b := &Bucket{Key: key}
+		b := &Bucket{Key: key, Closed: true}
 		m.closed[key] = b
 		m.append(b, ev)
 		m.emitBlocking(b, true)
@@ -240,7 +267,11 @@ func (m *Manager) closeExpired(ctx context.Context, now time.Time) {
 		select {
 		case m.out <- batch:
 			delete(m.windows, key)
+			b.Closed = true
 			m.closed[key] = b // retain for possible late correction
+			if m.store != nil {
+				_ = m.store.Save(b) // persist closed state so a restart won't re-emit
+			}
 		case <-ctx.Done():
 			return // shutting down; leftover windows stay persisted for resume
 		}

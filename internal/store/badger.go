@@ -4,7 +4,9 @@
 package store
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -45,13 +47,15 @@ type bucketStore struct {
 }
 
 // keyPrefix is the Badger key namespace for this store's buckets:
-//   window/{prefix}/
+//
+//	window/{prefix}/
 func (s *bucketStore) keyPrefix() string {
 	return fmt.Sprintf("window/%s/", s.prefix)
 }
 
 // key builds the full Badger key for a window bucket:
-//   window/{prefix}/{group_key}/{window_start_unix}
+//
+//	window/{prefix}/{group_key}/{window_start_unix}
 func (s *bucketStore) key(k window.Key) []byte {
 	return []byte(fmt.Sprintf("%s%s/%d", s.keyPrefix(), k.GroupKey, k.WindowStart.Unix()))
 }
@@ -70,6 +74,46 @@ func (s *bucketStore) Delete(k window.Key) error {
 	return s.db.Update(func(txn *badger.Txn) error {
 		return txn.Delete(s.key(k))
 	})
+}
+
+// checkpointKey is the Badger key holding this store's watermark:
+//
+//	checkpoint/{prefix}
+func (s *bucketStore) checkpointKey() []byte {
+	return []byte(fmt.Sprintf("checkpoint/%s", s.prefix))
+}
+
+func (s *bucketStore) SaveCheckpoint(maxTS int64) error {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(maxTS))
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(s.checkpointKey(), buf[:])
+	})
+}
+
+func (s *bucketStore) LoadCheckpoint() (int64, bool, error) {
+	var (
+		maxTS int64
+		found bool
+	)
+	err := s.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(s.checkpointKey())
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			if len(val) != 8 {
+				return fmt.Errorf("checkpoint %s: bad length %d", s.prefix, len(val))
+			}
+			maxTS = int64(binary.BigEndian.Uint64(val))
+			found = true
+			return nil
+		})
+	})
+	return maxTS, found, err
 }
 
 func (s *bucketStore) LoadAll() ([]*window.Bucket, error) {
