@@ -16,9 +16,10 @@ import (
 // Engine wires the pipeline stages together: ingestion → tumbling window →
 // aggregate → HAVING evaluation → console notification.
 //
-// Rules may declare different window sizes, so the engine runs one window
-// Manager per distinct size and fans incoming events out to each. Every closed
-// batch is evaluated only against the rules that share its window size.
+// Rules may declare different window sizes and group-by fields, so the engine
+// runs one window Manager per distinct (window size, group_by) combination and
+// fans incoming events out to each. Every closed batch is evaluated only
+// against the rules that share its window size and grouping.
 type Engine struct {
 	in            <-chan model.Event
 	defaultWindow time.Duration
@@ -50,6 +51,32 @@ func (e *Engine) WithLateness(d time.Duration) *Engine {
 	return e
 }
 
+// streamKey identifies one window Manager: rules sharing both a window size and
+// a group_by field are served by the same Manager so their GroupKeys line up.
+type streamKey struct {
+	size    time.Duration
+	groupBy string
+}
+
+// namespace is the persistence prefix for this stream. It includes the group_by
+// field so managers of the same size but different grouping don't collide in the
+// store.
+func (k streamKey) namespace() string { return k.size.String() + "/" + k.groupBy }
+
+// normalizeGroupBy maps an empty group_by to the historical "service" default.
+func normalizeGroupBy(field string) string {
+	if field == "" {
+		return "service"
+	}
+	return field
+}
+
+// groupFuncFor builds the window GroupFunc that extracts the group_by field's
+// value from each event.
+func groupFuncFor(field string) window.GroupFunc {
+	return func(ev model.Event) string { return rule.GroupValue(ev, field) }
+}
+
 // taggedBatch carries a closed window together with the rules that apply to it.
 type taggedBatch struct {
 	batch window.Batch
@@ -69,31 +96,32 @@ func (e *Engine) Run(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	bySize := map[time.Duration][]rule.Rule{}
+	byGroup := map[streamKey][]rule.Rule{}
 	for _, r := range e.rules {
 		size := r.WindowSize
 		if size <= 0 {
 			size = e.defaultWindow
 		}
-		bySize[size] = append(bySize[size], r)
+		gk := streamKey{size: size, groupBy: normalizeGroupBy(r.GroupBy)}
+		byGroup[gk] = append(byGroup[gk], r)
 	}
 
 	batchCh := make(chan taggedBatch, window.DefaultBatchBuffer)
-	streams := make([]windowStream, 0, len(bySize))
+	streams := make([]windowStream, 0, len(byGroup))
 
-	for size, rules := range bySize {
+	for gk, rules := range byGroup {
 		in := make(chan model.Event, 1024)
 		out := make(chan window.Batch, window.DefaultBatchBuffer)
-		mgr := window.NewManager(size, in, out, nil, nil)
+		mgr := window.NewManager(gk.size, in, out, groupFuncFor(gk.groupBy), nil)
 		mgr.SetLateness(e.lateness)
 		rules := rules // capture per iteration
 
 		if e.store != nil {
-			mgr.SetStore(e.store.Buckets(size.String()))
+			mgr.SetStore(e.store.Buckets(gk.namespace()))
 			if n, err := mgr.Restore(); err != nil {
-				return fmt.Errorf("restore windows (size=%s): %w", size, err)
+				return fmt.Errorf("restore windows (%s): %w", gk.namespace(), err)
 			} else if n > 0 {
-				fmt.Printf("[store] restored %d open window(s) for size=%s\n", n, size)
+				fmt.Printf("[store] restored %d open window(s) for %s\n", n, gk.namespace())
 			}
 		}
 

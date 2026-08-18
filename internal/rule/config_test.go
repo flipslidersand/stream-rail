@@ -87,7 +87,8 @@ rules:
 	}
 }
 
-func TestLoadFile_UnsupportedGroupBy(t *testing.T) {
+func TestLoadFile_ArbitraryGroupBy(t *testing.T) {
+	// Since #17 any field (a Fields key here) is a valid group_by.
 	path := writeConfig(t, `
 rules:
   - name: by-host
@@ -95,8 +96,12 @@ rules:
     aggregate: { func: count }
     having: { gt: 1 }
 `)
-	if _, err := rule.LoadFile(path); err == nil {
-		t.Fatal("expected error for unsupported group_by")
+	rules, err := rule.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if rules[0].GroupBy != "host" {
+		t.Fatalf("group_by = %q, want host", rules[0].GroupBy)
 	}
 }
 
