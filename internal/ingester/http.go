@@ -8,11 +8,12 @@ import (
 )
 
 // HTTPIngester は POST /events で受け取ったイベントを ch に投入する。
+// HTTP には ack の概念がないため、封筒の Ack は nil で送る（#19）。
 type HTTPIngester struct {
-	ch chan<- model.Event
+	ch chan<- model.Envelope
 }
 
-func NewHTTPIngester(ch chan<- model.Event) *HTTPIngester {
+func NewHTTPIngester(ch chan<- model.Envelope) *HTTPIngester {
 	return &HTTPIngester{ch: ch}
 }
 
@@ -29,7 +30,7 @@ func (h *HTTPIngester) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	select {
-	case h.ch <- ev:
+	case h.ch <- model.Envelope{Event: ev}:
 		w.WriteHeader(http.StatusAccepted)
 	default:
 		http.Error(w, "channel full", http.StatusServiceUnavailable)

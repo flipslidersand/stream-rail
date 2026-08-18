@@ -23,7 +23,7 @@ func TestDecodeEvent_Invalid(t *testing.T) {
 }
 
 func TestNewNATS_DurableName(t *testing.T) {
-	ch := make(chan model.Event, 1)
+	ch := make(chan model.Envelope, 1)
 	n := NewNATS("nats://localhost:4222", "application_logs", ch)
 	if n.durable != "streamrail-application_logs" {
 		t.Fatalf("durable = %q, want streamrail-application_logs", n.durable)
