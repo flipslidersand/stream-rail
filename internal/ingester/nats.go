@@ -20,7 +20,7 @@ type NATSIngester struct {
 	url     string
 	subject string
 	durable string
-	eventCh chan<- model.Event
+	eventCh chan<- model.Envelope
 
 	nc  *nats.Conn
 	sub *nats.Subscription
@@ -28,7 +28,7 @@ type NATSIngester struct {
 
 // NewNATS builds a NATS ingester. subject is both the JetStream subject and the
 // stream name; durable identifies the consumer so redelivery survives restarts.
-func NewNATS(url, subject string, eventCh chan<- model.Event) *NATSIngester {
+func NewNATS(url, subject string, eventCh chan<- model.Envelope) *NATSIngester {
 	return &NATSIngester{
 		url:     url,
 		subject: subject,
@@ -80,9 +80,11 @@ func (n *NATSIngester) Stop() {
 	}
 }
 
-// handle decodes each message and enqueues it. A malformed message is
-// terminated (never redelivered); a valid one is acked only after it is
-// accepted onto eventCh.
+// handle decodes each message and enqueues it wrapped in an Envelope whose Ack
+// defers the NATS acknowledgement until the pipeline has durably processed the
+// event (end-to-end at-least-once, #19). A malformed message is terminated
+// (never redelivered). A crash after enqueue but before the window Manager acks
+// leaves the message unacked, so JetStream redelivers it — no event is lost.
 func (n *NATSIngester) handle(ctx context.Context) nats.MsgHandler {
 	return func(msg *nats.Msg) {
 		ev, err := decodeEvent(msg.Data)
@@ -90,11 +92,12 @@ func (n *NATSIngester) handle(ctx context.Context) nats.MsgHandler {
 			_ = msg.Term() // poison message: don't redeliver
 			return
 		}
+		env := model.Envelope{Event: ev, Ack: func() { _ = msg.Ack() }}
 		select {
-		case n.eventCh <- ev:
-			_ = msg.Ack()
+		case n.eventCh <- env:
+			// Ack is now the pipeline's responsibility (fires after processing).
 		case <-ctx.Done():
-			_ = msg.Nak() // shutting down: let it be redelivered later
+			_ = msg.Nak() // shutting down before enqueue: redeliver later
 		}
 	}
 }

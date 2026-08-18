@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/flipslidersand/stream-rail/internal/aggregator"
@@ -21,7 +22,7 @@ import (
 // fans incoming events out to each. Every closed batch is evaluated only
 // against the rules that share its window size and grouping.
 type Engine struct {
-	in            <-chan model.Event
+	in            <-chan model.Envelope
 	defaultWindow time.Duration
 	lateness      time.Duration
 	rules         []rule.Rule
@@ -32,7 +33,7 @@ type Engine struct {
 // New builds an Engine reading from in. defaultWindow is applied to rules that
 // don't declare their own window size (defaults to 5 minutes). out receives
 // alert output (nil = os.Stdout). store may be nil to disable persistence.
-func New(in <-chan model.Event, defaultWindow time.Duration, rules []rule.Rule, out io.Writer, store window.StoreFactory) *Engine {
+func New(in <-chan model.Envelope, defaultWindow time.Duration, rules []rule.Rule, out io.Writer, store window.StoreFactory) *Engine {
 	if defaultWindow <= 0 {
 		defaultWindow = 5 * time.Minute
 	}
@@ -85,7 +86,7 @@ type taggedBatch struct {
 
 // windowStream is one Manager's input channel plus the rules it serves.
 type windowStream struct {
-	in chan model.Event
+	in chan model.Envelope
 }
 
 // Run starts a window Manager per distinct window size, fans events out to all
@@ -110,7 +111,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	streams := make([]windowStream, 0, len(byGroup))
 
 	for gk, rules := range byGroup {
-		in := make(chan model.Event, 1024)
+		in := make(chan model.Envelope, 1024)
 		out := make(chan window.Batch, window.DefaultBatchBuffer)
 		mgr := window.NewManager(gk.size, in, out, groupFuncFor(gk.groupBy), nil)
 		mgr.SetLateness(e.lateness)
@@ -161,23 +162,47 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 }
 
-// fanOut copies each incoming event to every window stream.
+// fanOut copies each incoming envelope to every window stream. Because one event
+// is added to every stream's window Manager, the upstream Ack must fire only
+// once — after all managers have durably processed it (end-to-end at-least-once,
+// #19). A per-event countdown wraps the original Ack: each stream's copy carries
+// a child Ack that decrements the counter, and the last one to finish invokes the
+// real Ack. On shutdown some copies may never be delivered, so the counter never
+// reaches zero and the event is left unacked for redelivery — exactly the
+// at-least-once contract.
 func (e *Engine) fanOut(ctx context.Context, streams []windowStream) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case ev, ok := <-e.in:
+		case env, ok := <-e.in:
 			if !ok {
 				return
 			}
+			done := ackBarrier(env.Ack, len(streams))
 			for _, s := range streams {
+				child := model.Envelope{Event: env.Event, Ack: done}
 				select {
-				case s.in <- ev:
+				case s.in <- child:
 				case <-ctx.Done():
 					return
 				}
 			}
+		}
+	}
+}
+
+// ackBarrier returns a func that, once called n times, invokes ack exactly once.
+// If ack is nil (e.g. HTTP ingestion) the returned func is a no-op. n is always
+// >= 1 here because the engine runs at least one window Manager.
+func ackBarrier(ack func(), n int) func() {
+	if ack == nil {
+		return func() {}
+	}
+	remaining := int32(n)
+	return func() {
+		if atomic.AddInt32(&remaining, -1) == 0 {
+			ack()
 		}
 	}
 }

@@ -70,7 +70,7 @@ func (s *safeBuffer) String() string {
 // TestEngine_GroupsByArbitraryField verifies that a rule grouping by a Fields
 // key (host) aggregates per host rather than per service (#17).
 func TestEngine_GroupsByArbitraryField(t *testing.T) {
-	in := make(chan model.Event, 16)
+	in := make(chan model.Envelope, 16)
 	out := &safeBuffer{}
 
 	rules := []rule.Rule{{
@@ -92,9 +92,9 @@ func TestEngine_GroupsByArbitraryField(t *testing.T) {
 		return model.Event{Service: "api", Level: "ERROR", Timestamp: ts, Fields: map[string]any{"host": host}}
 	}
 	// h1 gets 2 events (> 1 → alert); h2 gets 1 (no alert).
-	in <- ev("h1")
-	in <- ev("h1")
-	in <- ev("h2")
+	in <- model.Envelope{Event: ev("h1")}
+	in <- model.Envelope{Event: ev("h1")}
+	in <- model.Envelope{Event: ev("h2")}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

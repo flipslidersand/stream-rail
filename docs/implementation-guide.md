@@ -79,7 +79,12 @@ curl -X POST http://localhost:8080/events \
 
 - `internal/ingester/nats.go` — NATS JetStream の Consumer でイベントを受信
 - `nats.Connect` + `js.Subscribe` で `eventCh` に投入
-- at-least-once 保証のために ACK を集計後に送る
+- at-least-once 保証のために ACK を **処理完了後**に送る（#19）。イベントは
+  `model.Envelope{Event, Ack}` として pipeline を流れ、window Manager が
+  `add`（= 永続化 Save）した後に Ack を呼ぶ。複数 Manager へ fan-out する場合は
+  engine の ack barrier が全 Manager 処理後に1回だけ upstream へ ACK する。
+  真の「集計後 ACK」は窓クローズまで ACK を保留しレイテンシが増大するため、
+  「永続化完了 = 耐久保証確立」とみなし add 時点 ACK を採用（トレードオフ）。
 
 ### 完成条件
 

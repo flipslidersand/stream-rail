@@ -79,7 +79,7 @@ func runServer(cfg runConfig) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	ch := make(chan model.Event, 1024)
+	ch := make(chan model.Envelope, 1024)
 	ing := ingester.NewHTTPIngester(ch)
 	eng := engine.New(ch, cfg.windowSize, rules, nil, storeFactory).WithLateness(cfg.lateness)
 

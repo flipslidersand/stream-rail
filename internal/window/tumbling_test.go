@@ -87,7 +87,7 @@ func TestCloseExpired_EmitsOnlyClosedWindows(t *testing.T) {
 }
 
 func TestRun_FlushesViaTicker(t *testing.T) {
-	in := make(chan model.Event, 8)
+	in := make(chan model.Envelope, 8)
 	out := make(chan Batch, 8)
 	// Drive the clock forward so ticker-triggered closeExpired sees the window
 	// as expired regardless of real event timestamps.
@@ -98,7 +98,7 @@ func TestRun_FlushesViaTicker(t *testing.T) {
 	defer cancel()
 	go func() { _ = m.Run(ctx) }()
 
-	in <- evAt("api", base.Unix())
+	in <- model.Envelope{Event: evAt("api", base.Unix())}
 
 	select {
 	case batch := <-out:
@@ -107,5 +107,29 @@ func TestRun_FlushesViaTicker(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for window flush")
+	}
+}
+
+// TestRun_AcksAfterProcessing verifies an envelope's Ack fires once the event
+// has been taken into a window (end-to-end at-least-once, #19).
+func TestRun_AcksAfterProcessing(t *testing.T) {
+	in := make(chan model.Envelope, 1)
+	// Fixed clock so the ticker never closes the window during the test.
+	m := NewManager(20*time.Millisecond, in, nil, nil, func() time.Time { return base })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = m.Run(ctx) }()
+
+	acked := make(chan struct{}, 1)
+	in <- model.Envelope{
+		Event: evAt("api", base.Unix()),
+		Ack:   func() { acked <- struct{}{} },
+	}
+
+	select {
+	case <-acked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event was not acked after processing")
 	}
 }

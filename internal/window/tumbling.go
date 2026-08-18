@@ -70,7 +70,7 @@ type StoreFactory interface {
 type Manager struct {
 	size     time.Duration
 	lateness time.Duration
-	in       <-chan model.Event
+	in       <-chan model.Envelope
 	out      chan<- Batch
 	groupBy  GroupFunc
 	now      func() time.Time
@@ -81,9 +81,9 @@ type Manager struct {
 }
 
 // NewManager builds a window Manager. size is the window duration; in supplies
-// events; out receives closed windows. groupBy/now may be nil (sensible
+// event envelopes; out receives closed windows. groupBy/now may be nil (sensible
 // defaults are used) — now is injectable so tests can control the clock.
-func NewManager(size time.Duration, in <-chan model.Event, out chan<- Batch, groupBy GroupFunc, now func() time.Time) *Manager {
+func NewManager(size time.Duration, in <-chan model.Envelope, out chan<- Batch, groupBy GroupFunc, now func() time.Time) *Manager {
 	if groupBy == nil {
 		groupBy = GroupByService
 	}
@@ -135,11 +135,16 @@ func (m *Manager) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case ev, ok := <-m.in:
+		case env, ok := <-m.in:
 			if !ok {
 				return nil
 			}
-			m.add(ev)
+			m.add(env.Event)
+			// End-to-end ack (#19): the event is now durably held (persisted if a
+			// store is attached), so it is safe to acknowledge upstream.
+			if env.Ack != nil {
+				env.Ack()
+			}
 		case <-ticker.C:
 			m.closeExpired(ctx, m.now())
 		}
