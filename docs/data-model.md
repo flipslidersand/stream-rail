@@ -67,9 +67,13 @@ type WindowConf struct {
 ## BadgerDB キースキーマ
 
 ```
-window/{rule_name}/{group_key}/{window_start_unix} → WindowBucket (msgpack)
-checkpoint/{rule_name}                              → 最終処理済み timestamp
+window/{size}/{group_by}/{group_key}/{window_start_unix} → WindowBucket (JSON)
+checkpoint/{size}/{group_by}                             → watermark (max event ts, unix秒)
 ```
+
+`{size}/{group_by}` は window Manager の namespace（同一プロセス内で window size ×
+group_by ごとに1つ）。checkpoint は再起動後に event-time watermark を継続させる
+ため、maxTS（見た最大イベント timestamp）を保存する（#18）。
 
 ## Channel パイプライン
 
