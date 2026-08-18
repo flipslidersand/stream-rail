@@ -44,8 +44,8 @@ type Rule struct {
 	Name       string
 	Filter     Filter
 	GroupBy    string
-	AggFunc    string        // AggCount | AggSum
-	AggField   string        // numeric field name, required for AggSum
+	AggFunc    string // AggCount | AggSum
+	AggField   string // numeric field name, required for AggSum
 	Having     Having
 	Emit       string        // "console" for Phase 3
 	WindowSize time.Duration // tumbling window size; 0 = engine default
@@ -90,6 +90,18 @@ func (h Having) Symbol() string {
 	default:
 		return "?"
 	}
+}
+
+// GroupValue returns the grouping key for an event under the given field.
+// An empty field groups by service (the historical default). A field that is
+// absent from the event yields "" so such events share one "unknown" bucket
+// rather than being dropped.
+func GroupValue(ev model.Event, field string) string {
+	if field == "" {
+		field = "service"
+	}
+	v, _ := fieldString(ev, field)
+	return v
 }
 
 // fieldString returns an event field as a string. service/level are promoted

@@ -86,10 +86,8 @@ func (yr yamlRule) toRule() (Rule, error) {
 		size = d
 	}
 
-	// Grouping: Phase-3 window manager groups by service only.
-	if yr.GroupBy != "" && yr.GroupBy != "service" {
-		return Rule{}, fmt.Errorf("unsupported group_by %q (only service currently)", yr.GroupBy)
-	}
+	// Grouping: any field is allowed (service/level or a Fields key). The engine
+	// derives a GroupFunc from group_by (#17); an empty value defaults to service.
 
 	// Aggregate.
 	switch yr.Aggregate.Func {

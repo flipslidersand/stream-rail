@@ -15,3 +15,20 @@ rules:
     having:
       gt: 20
     emit: console
+
+  # group_by accepts any field: "service", "level", or any key in the event's
+  # Fields map (here "host"). Events are aggregated per distinct host.
+  - name: host-error-spike
+    source: application_logs
+    window:
+      type: tumbling
+      size: 1m
+    filter:
+      field: level
+      eq: ERROR
+    group_by: host
+    aggregate:
+      func: count
+    having:
+      gt: 50
+    emit: console
