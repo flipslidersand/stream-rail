@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/flipslidersand/stream-rail/internal/aggregator"
+	"github.com/flipslidersand/stream-rail/internal/metrics"
 	"github.com/flipslidersand/stream-rail/internal/model"
 	"github.com/flipslidersand/stream-rail/internal/notifier"
 	"github.com/flipslidersand/stream-rail/internal/rule"
@@ -29,6 +30,7 @@ type Engine struct {
 	rules         []rule.Rule
 	console       *notifier.Console
 	store         window.StoreFactory // optional; nil disables persistence
+	metrics       *metrics.Metrics   // optional; nil disables instrumentation
 }
 
 // New builds an Engine reading from in. defaultWindow is applied to rules that
@@ -50,6 +52,12 @@ func New(in <-chan model.Envelope, defaultWindow time.Duration, rules []rule.Rul
 // WithLateness sets the allowed lateness for late-event correction (Phase 6).
 func (e *Engine) WithLateness(d time.Duration) *Engine {
 	e.lateness = d
+	return e
+}
+
+// WithMetrics attaches Prometheus counters (#28). Call before Run.
+func (e *Engine) WithMetrics(m *metrics.Metrics) *Engine {
+	e.metrics = m
 	return e
 }
 
@@ -170,6 +178,14 @@ func (e *Engine) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case tb := <-batchCh:
+			if e.metrics != nil {
+				correctedLabel := "false"
+				if tb.batch.Corrected {
+					correctedLabel = "true"
+					e.metrics.LateEventsTotal.Inc()
+				}
+				e.metrics.WindowsClosedTotal.WithLabelValues(correctedLabel).Inc()
+			}
 			for _, r := range tb.rules {
 				res := aggregator.Aggregate(tb.batch, r)
 				e.console.Emit(r, res)

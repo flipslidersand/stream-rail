@@ -9,13 +9,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/spf13/cobra"
+
 	"github.com/flipslidersand/stream-rail/internal/engine"
 	"github.com/flipslidersand/stream-rail/internal/ingester"
+	"github.com/flipslidersand/stream-rail/internal/metrics"
 	"github.com/flipslidersand/stream-rail/internal/model"
 	"github.com/flipslidersand/stream-rail/internal/rule"
 	"github.com/flipslidersand/stream-rail/internal/store"
 	"github.com/flipslidersand/stream-rail/internal/window"
-	"github.com/spf13/cobra"
 )
 
 // runConfig holds the resolved flags for the run command.
@@ -29,6 +33,7 @@ type runConfig struct {
 	natsSubject   string
 	lateness      time.Duration
 	natsDedupeTTL time.Duration
+	metricsAddr   string
 }
 
 func main() {
@@ -54,6 +59,7 @@ func main() {
 	run.Flags().StringVar(&cfg.natsSubject, "nats-subject", "application_logs", "NATS JetStream subject/stream to consume")
 	run.Flags().DurationVar(&cfg.lateness, "lateness", 0, "allowed lateness for late-event correction (0 = disabled)")
 	run.Flags().DurationVar(&cfg.natsDedupeTTL, "nats-dedupe-ttl", ingester.DefaultDedupeTTL, "TTL for NATS deduplication seen entries (must exceed MaxDeliver × AckWait)")
+	run.Flags().StringVar(&cfg.metricsAddr, "metrics-addr", "", "address to expose Prometheus /metrics (e.g. :9090; empty = disabled)")
 	root.AddCommand(run)
 
 	if err := root.Execute(); err != nil {
@@ -78,12 +84,35 @@ func runServer(cfg runConfig) error {
 		fmt.Printf("persisting window state to %s\n", cfg.dataDir)
 	}
 
+	// Optional Prometheus metrics (#28).
+	var m *metrics.Metrics
+	if cfg.metricsAddr != "" {
+		reg := prometheus.NewRegistry()
+		m = metrics.New(reg)
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+		metricsSrv := &http.Server{Addr: cfg.metricsAddr, Handler: metricsMux}
+		go func() {
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "metrics server error: %v\n", err)
+			}
+		}()
+		fmt.Printf("Prometheus metrics listening on %s/metrics\n", cfg.metricsAddr)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	ch := make(chan model.Envelope, 1024)
 	ing := ingester.NewHTTPIngester(ch)
+	if m != nil {
+		ing.WithEventsCounter(m.EventsTotal.WithLabelValues("http"))
+	}
+
 	eng := engine.New(ch, cfg.windowSize, rules, nil, storeFactory).WithLateness(cfg.lateness)
+	if m != nil {
+		eng.WithMetrics(m)
+	}
 
 	// Optional NATS JetStream ingester, feeding the same event channel.
 	if cfg.natsURL != "" {
@@ -92,6 +121,9 @@ func runServer(cfg runConfig) error {
 		if db, ok := storeFactory.(*store.Badger); ok {
 			ni.WithDeduper(db.Seen()).WithDedupeTTL(cfg.natsDedupeTTL)
 			fmt.Printf("NATS deduplication enabled (seen store: BadgerDB, TTL: %s)\n", cfg.natsDedupeTTL)
+		}
+		if m != nil {
+			ni.WithCounters(m.EventsTotal.WithLabelValues("nats"), m.DedupedTotal)
 		}
 		if err := ni.Start(ctx); err != nil {
 			return err
