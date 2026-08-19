@@ -20,14 +20,15 @@ import (
 
 // runConfig holds the resolved flags for the run command.
 type runConfig struct {
-	addr        string
-	windowSize  time.Duration
-	threshold   float64
-	configPath  string
-	dataDir     string
-	natsURL     string
-	natsSubject string
-	lateness    time.Duration
+	addr          string
+	windowSize    time.Duration
+	threshold     float64
+	configPath    string
+	dataDir       string
+	natsURL       string
+	natsSubject   string
+	lateness      time.Duration
+	natsDedupeTTL time.Duration
 }
 
 func main() {
@@ -52,6 +53,7 @@ func main() {
 	run.Flags().StringVar(&cfg.natsURL, "nats", "", "NATS server URL for JetStream ingestion (e.g. nats://localhost:4222; empty = HTTP only)")
 	run.Flags().StringVar(&cfg.natsSubject, "nats-subject", "application_logs", "NATS JetStream subject/stream to consume")
 	run.Flags().DurationVar(&cfg.lateness, "lateness", 0, "allowed lateness for late-event correction (0 = disabled)")
+	run.Flags().DurationVar(&cfg.natsDedupeTTL, "nats-dedupe-ttl", ingester.DefaultDedupeTTL, "TTL for NATS deduplication seen entries (must exceed MaxDeliver × AckWait)")
 	root.AddCommand(run)
 
 	if err := root.Execute(); err != nil {
@@ -86,10 +88,10 @@ func runServer(cfg runConfig) error {
 	// Optional NATS JetStream ingester, feeding the same event channel.
 	if cfg.natsURL != "" {
 		ni := ingester.NewNATS(cfg.natsURL, cfg.natsSubject, ch)
-		// Attach deduplication store when BadgerDB is enabled (#23).
+		// Attach deduplication store when BadgerDB is enabled (#23, #27).
 		if db, ok := storeFactory.(*store.Badger); ok {
-			ni.WithDeduper(db.Seen())
-			fmt.Println("NATS deduplication enabled (seen store: BadgerDB)")
+			ni.WithDeduper(db.Seen()).WithDedupeTTL(cfg.natsDedupeTTL)
+			fmt.Printf("NATS deduplication enabled (seen store: BadgerDB, TTL: %s)\n", cfg.natsDedupeTTL)
 		}
 		if err := ni.Start(ctx); err != nil {
 			return err
