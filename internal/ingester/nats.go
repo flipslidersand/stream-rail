@@ -5,11 +5,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nats-io/nats.go"
 
 	"github.com/flipslidersand/stream-rail/internal/model"
 )
+
+// Deduper は処理済みメッセージ ID を照会・登録するインターフェース。
+// store.DedupeStore が実装する。nil の場合は冪等化を行わない。
+type Deduper interface {
+	Seen(id string) bool
+	Mark(id string, ttl time.Duration) error
+}
+
+// DefaultDedupeТТL は seen エントリの保持期間。JetStream の最大再配信期間
+// （MaxDeliver × AckWait）より十分長い値にする。
+const DefaultDedupeTTL = 24 * time.Hour
 
 // NATSIngester consumes events from a NATS JetStream subject and forwards them
 // onto the pipeline's event channel. It provides at-least-once delivery: a
@@ -21,6 +33,7 @@ type NATSIngester struct {
 	subject string
 	durable string
 	eventCh chan<- model.Envelope
+	deduper Deduper
 
 	nc  *nats.Conn
 	sub *nats.Subscription
@@ -35,6 +48,13 @@ func NewNATS(url, subject string, eventCh chan<- model.Envelope) *NATSIngester {
 		durable: "streamrail-" + subject,
 		eventCh: eventCh,
 	}
+}
+
+// WithDeduper attaches a deduplication store to prevent double-counting on
+// NATS redelivery (#23). Call before Start.
+func (n *NATSIngester) WithDeduper(d Deduper) *NATSIngester {
+	n.deduper = d
+	return n
 }
 
 // Start connects to NATS, ensures the JetStream stream exists, and subscribes.
@@ -80,19 +100,49 @@ func (n *NATSIngester) Stop() {
 	}
 }
 
+// msgID extracts a stable unique ID from a JetStream message using the stream
+// sequence number. Falls back to empty string if metadata is unavailable.
+func msgID(msg *nats.Msg) string {
+	meta, err := msg.Metadata()
+	if err != nil || meta == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s.%d", meta.Stream, meta.Sequence.Stream)
+}
+
 // handle decodes each message and enqueues it wrapped in an Envelope whose Ack
 // defers the NATS acknowledgement until the pipeline has durably processed the
 // event (end-to-end at-least-once, #19). A malformed message is terminated
 // (never redelivered). A crash after enqueue but before the window Manager acks
 // leaves the message unacked, so JetStream redelivers it — no event is lost.
+//
+// Deduplication (#23): if a Deduper is attached, any message whose ID is already
+// in the seen store is immediately acked and dropped — preventing double-counting
+// on redelivery. The seen entry is written inside the Ack callback, so a crash
+// before Ack does not suppress the redelivered event.
 func (n *NATSIngester) handle(ctx context.Context) nats.MsgHandler {
 	return func(msg *nats.Msg) {
+		id := msgID(msg)
+
+		// Before decoding, reject duplicates cheaply.
+		if id != "" && n.deduper != nil && n.deduper.Seen(id) {
+			_ = msg.Ack()
+			return
+		}
+
 		ev, err := decodeEvent(msg.Data)
 		if err != nil {
 			_ = msg.Term() // poison message: don't redeliver
 			return
 		}
-		env := model.Envelope{Event: ev, Ack: func() { _ = msg.Ack() }}
+
+		ack := func() {
+			if id != "" && n.deduper != nil {
+				_ = n.deduper.Mark(id, DefaultDedupeTTL)
+			}
+			_ = msg.Ack()
+		}
+		env := model.Envelope{ID: id, Event: ev, Ack: ack}
 		select {
 		case n.eventCh <- env:
 			// Ack is now the pipeline's responsibility (fires after processing).

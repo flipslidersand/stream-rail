@@ -86,6 +86,11 @@ func runServer(cfg runConfig) error {
 	// Optional NATS JetStream ingester, feeding the same event channel.
 	if cfg.natsURL != "" {
 		ni := ingester.NewNATS(cfg.natsURL, cfg.natsSubject, ch)
+		// Attach deduplication store when BadgerDB is enabled (#23).
+		if db, ok := storeFactory.(*store.Badger); ok {
+			ni.WithDeduper(db.Seen())
+			fmt.Println("NATS deduplication enabled (seen store: BadgerDB)")
+		}
 		if err := ni.Start(ctx); err != nil {
 			return err
 		}

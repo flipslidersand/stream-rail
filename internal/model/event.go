@@ -13,7 +13,10 @@ type Event struct {
 // at-least-once ingester が「enqueue 時点」ではなく「処理完了後」に ack を
 // 送れるようにするためのもので、transport の関心事を Event 本体に混ぜない。
 // Ack は nil でもよい（例: HTTP ingestion には ack の概念がない）。
+// ID は JetStream ストリームシーケンス等の transport 固有の一意識別子。
+// 空文字の場合は冪等化スキップ（HTTP など ID を持たない ingester）。
 type Envelope struct {
+	ID    string
 	Event Event
 	Ack   func()
 }

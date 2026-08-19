@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
 
@@ -138,4 +139,34 @@ func (s *bucketStore) LoadAll() ([]*window.Bucket, error) {
 		return nil, err
 	}
 	return buckets, nil
+}
+
+// DedupeStore は処理済みメッセージ ID を一時保持し、再配信による二重計上を防ぐ。
+// キースキーマ: seen/{id}（Badger TTL で自動 GC）。
+type DedupeStore struct {
+	db *badger.DB
+}
+
+// Seen は id が既に処理済みであれば true を返す。DB エラーは false 扱い（最悪
+// 二重計上になるが、サービス停止より安全）。
+func (d *DedupeStore) Seen(id string) bool {
+	err := d.db.View(func(txn *badger.Txn) error {
+		_, err := txn.Get([]byte("seen/" + id))
+		return err
+	})
+	return err == nil
+}
+
+// Mark は id を処理済みとして ttl の間保持する。TTL は NATS の最大再配信
+// 期間（= JetStream MaxDeliver * AckWait）より長く設定すること。
+func (d *DedupeStore) Mark(id string, ttl time.Duration) error {
+	e := badger.NewEntry([]byte("seen/"+id), []byte{1}).WithTTL(ttl)
+	return d.db.Update(func(txn *badger.Txn) error {
+		return txn.SetEntry(e)
+	})
+}
+
+// Seen returns a DedupeStore backed by this Badger instance.
+func (b *Badger) Seen() *DedupeStore {
+	return &DedupeStore{db: b.db}
 }
