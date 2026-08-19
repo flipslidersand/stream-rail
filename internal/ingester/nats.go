@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/flipslidersand/stream-rail/internal/model"
 )
@@ -29,12 +30,14 @@ const DefaultDedupeTTL = 24 * time.Hour
 // a crash before Ack results in redelivery. See docs/implementation-guide.md
 // Phase 5 and ADR-004-nats-phase5.
 type NATSIngester struct {
-	url       string
-	subject   string
-	durable   string
-	eventCh   chan<- model.Envelope
-	deduper   Deduper
-	dedupeTTL time.Duration
+	url            string
+	subject        string
+	durable        string
+	eventCh        chan<- model.Envelope
+	deduper        Deduper
+	dedupeTTL      time.Duration
+	eventsCounter  prometheus.Counter // optional; nil = no-op
+	dedupedCounter prometheus.Counter // optional; nil = no-op
 
 	nc  *nats.Conn
 	sub *nats.Subscription
@@ -65,6 +68,14 @@ func (n *NATSIngester) WithDedupeTTL(ttl time.Duration) *NATSIngester {
 	if ttl > 0 {
 		n.dedupeTTL = ttl
 	}
+	return n
+}
+
+// WithCounters attaches Prometheus counters for accepted events and deduplicated
+// messages (#28). Call before Start.
+func (n *NATSIngester) WithCounters(events, deduped prometheus.Counter) *NATSIngester {
+	n.eventsCounter = events
+	n.dedupedCounter = deduped
 	return n
 }
 
@@ -137,6 +148,9 @@ func (n *NATSIngester) handle(ctx context.Context) nats.MsgHandler {
 
 		// Before decoding, reject duplicates cheaply.
 		if id != "" && n.deduper != nil && n.deduper.Seen(id) {
+			if n.dedupedCounter != nil {
+				n.dedupedCounter.Inc()
+			}
 			_ = msg.Ack()
 			return
 		}
@@ -156,6 +170,9 @@ func (n *NATSIngester) handle(ctx context.Context) nats.MsgHandler {
 		env := model.Envelope{ID: id, Event: ev, Ack: ack}
 		select {
 		case n.eventCh <- env:
+			if n.eventsCounter != nil {
+				n.eventsCounter.Inc()
+			}
 			// Ack is now the pipeline's responsibility (fires after processing).
 		case <-ctx.Done():
 			_ = msg.Nak() // shutting down before enqueue: redeliver later
