@@ -29,11 +29,12 @@ const DefaultDedupeTTL = 24 * time.Hour
 // a crash before Ack results in redelivery. See docs/implementation-guide.md
 // Phase 5 and ADR-004-nats-phase5.
 type NATSIngester struct {
-	url     string
-	subject string
-	durable string
-	eventCh chan<- model.Envelope
-	deduper Deduper
+	url       string
+	subject   string
+	durable   string
+	eventCh   chan<- model.Envelope
+	deduper   Deduper
+	dedupeTTL time.Duration
 
 	nc  *nats.Conn
 	sub *nats.Subscription
@@ -43,10 +44,11 @@ type NATSIngester struct {
 // stream name; durable identifies the consumer so redelivery survives restarts.
 func NewNATS(url, subject string, eventCh chan<- model.Envelope) *NATSIngester {
 	return &NATSIngester{
-		url:     url,
-		subject: subject,
-		durable: "streamrail-" + subject,
-		eventCh: eventCh,
+		url:       url,
+		subject:   subject,
+		durable:   "streamrail-" + subject,
+		eventCh:   eventCh,
+		dedupeTTL: DefaultDedupeTTL,
 	}
 }
 
@@ -54,6 +56,15 @@ func NewNATS(url, subject string, eventCh chan<- model.Envelope) *NATSIngester {
 // NATS redelivery (#23). Call before Start.
 func (n *NATSIngester) WithDeduper(d Deduper) *NATSIngester {
 	n.deduper = d
+	return n
+}
+
+// WithDedupeTTL overrides the default seen-entry TTL (#27). Must be > 0;
+// silently ignored otherwise. Call before Start.
+func (n *NATSIngester) WithDedupeTTL(ttl time.Duration) *NATSIngester {
+	if ttl > 0 {
+		n.dedupeTTL = ttl
+	}
 	return n
 }
 
@@ -138,7 +149,7 @@ func (n *NATSIngester) handle(ctx context.Context) nats.MsgHandler {
 
 		ack := func() {
 			if id != "" && n.deduper != nil {
-				_ = n.deduper.Mark(id, DefaultDedupeTTL)
+				_ = n.deduper.Mark(id, n.dedupeTTL)
 			}
 			_ = msg.Ack()
 		}

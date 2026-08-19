@@ -66,6 +66,25 @@ func TestNATSIngester_WithDeduper(t *testing.T) {
 	}
 }
 
+func TestNATSIngester_WithDedupeTTL(t *testing.T) {
+	ch := make(chan model.Envelope, 1)
+	n := NewNATS("nats://localhost:4222", "logs", ch)
+	if n.dedupeTTL != DefaultDedupeTTL {
+		t.Fatalf("default TTL = %s, want %s", n.dedupeTTL, DefaultDedupeTTL)
+	}
+
+	n.WithDedupeTTL(48 * time.Hour)
+	if n.dedupeTTL != 48*time.Hour {
+		t.Fatalf("TTL after override = %s, want 48h", n.dedupeTTL)
+	}
+
+	// Zero or negative must not overwrite.
+	n.WithDedupeTTL(0)
+	if n.dedupeTTL != 48*time.Hour {
+		t.Fatalf("TTL after zero override = %s, want 48h (unchanged)", n.dedupeTTL)
+	}
+}
+
 func TestFakeDeduper_SeenMark(t *testing.T) {
 	d := newFakeDeduper()
 	if d.Seen("x") {
