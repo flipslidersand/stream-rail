@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -64,18 +65,20 @@ type streamKey struct {
 // store.
 func (k streamKey) namespace() string { return k.size.String() + "/" + k.groupBy }
 
-// normalizeGroupBy maps an empty group_by to the historical "service" default.
-func normalizeGroupBy(field string) string {
-	if field == "" {
+// normalizeGroupBy returns a canonical group_by key string for use as a map key
+// and persistence namespace. An empty or nil slice defaults to "service".
+// Multiple fields are joined with "|" so distinct combinations map to distinct keys.
+func normalizeGroupBy(fields []string) string {
+	if len(fields) == 0 {
 		return "service"
 	}
-	return field
+	return strings.Join(fields, "|")
 }
 
-// groupFuncFor builds the window GroupFunc that extracts the group_by field's
-// value from each event.
-func groupFuncFor(field string) window.GroupFunc {
-	return func(ev model.Event) string { return rule.GroupValue(ev, field) }
+// groupFuncFor builds the window GroupFunc that extracts the group_by composite
+// key from each event. Supports single and multi-field grouping (#26).
+func groupFuncFor(fields []string) window.GroupFunc {
+	return func(ev model.Event) string { return rule.GroupKey(ev, fields) }
 }
 
 // taggedBatch carries a closed window together with the rules that apply to it.
@@ -107,13 +110,26 @@ func (e *Engine) Run(ctx context.Context) error {
 		byGroup[gk] = append(byGroup[gk], r)
 	}
 
+	// groupFields holds the original []string per streamKey for GroupFunc construction.
+	groupFields := map[streamKey][]string{}
+	for _, r := range e.rules {
+		size := r.WindowSize
+		if size <= 0 {
+			size = e.defaultWindow
+		}
+		gk := streamKey{size: size, groupBy: normalizeGroupBy(r.GroupBy)}
+		if _, ok := groupFields[gk]; !ok {
+			groupFields[gk] = r.GroupBy
+		}
+	}
+
 	batchCh := make(chan taggedBatch, window.DefaultBatchBuffer)
 	streams := make([]windowStream, 0, len(byGroup))
 
 	for gk, rules := range byGroup {
 		in := make(chan model.Envelope, 1024)
 		out := make(chan window.Batch, window.DefaultBatchBuffer)
-		mgr := window.NewManager(gk.size, in, out, groupFuncFor(gk.groupBy), nil)
+		mgr := window.NewManager(gk.size, in, out, groupFuncFor(groupFields[gk]), nil)
 		mgr.SetLateness(e.lateness)
 		rules := rules // capture per iteration
 

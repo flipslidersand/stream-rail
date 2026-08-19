@@ -43,6 +43,24 @@ func TestHaving_Satisfied(t *testing.T) {
 	}
 }
 
+func TestGroupKey(t *testing.T) {
+	ev := model.Event{Service: "api", Level: "ERROR", Fields: map[string]any{"region": "us", "host": "h1"}}
+
+	if got := rule.GroupKey(ev, nil); got != "api" {
+		t.Errorf("nil fields = %q, want api (service default)", got)
+	}
+	if got := rule.GroupKey(ev, []string{"service"}); got != "api" {
+		t.Errorf("single = %q, want api", got)
+	}
+	if got := rule.GroupKey(ev, []string{"service", "region"}); got != "api|us" {
+		t.Errorf("service+region = %q, want api|us", got)
+	}
+	// Absent field contributes empty string.
+	if got := rule.GroupKey(ev, []string{"service", "missing"}); got != "api|" {
+		t.Errorf("missing field = %q, want api|", got)
+	}
+}
+
 func TestFieldFloat(t *testing.T) {
 	ev := model.Event{Fields: map[string]any{"n": float64(1.5), "i": 3, "s": "2.5", "bad": "x"}}
 	for _, c := range []struct {

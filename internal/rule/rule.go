@@ -7,6 +7,7 @@ package rule
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flipslidersand/stream-rail/internal/model"
@@ -43,9 +44,9 @@ type Having struct {
 type Rule struct {
 	Name       string
 	Filter     Filter
-	GroupBy    string
-	AggFunc    string // AggCount | AggSum
-	AggField   string // numeric field name, required for AggSum
+	GroupBy    []string // one or more fields; empty defaults to ["service"]
+	AggFunc    string   // AggCount | AggSum
+	AggField   string   // numeric field name, required for AggSum
 	Having     Having
 	Emit       string        // "console" for Phase 3
 	WindowSize time.Duration // tumbling window size; 0 = engine default
@@ -102,6 +103,23 @@ func GroupValue(ev model.Event, field string) string {
 	}
 	v, _ := fieldString(ev, field)
 	return v
+}
+
+// GroupKey returns a composite grouping key for an event by joining the values
+// of all fields with "|". Absent fields contribute "" so events still bucket
+// predictably. An empty or nil fields slice falls back to the "service" field.
+func GroupKey(ev model.Event, fields []string) string {
+	if len(fields) == 0 {
+		return GroupValue(ev, "service")
+	}
+	if len(fields) == 1 {
+		return GroupValue(ev, fields[0])
+	}
+	parts := make([]string, len(fields))
+	for i, f := range fields {
+		parts[i] = GroupValue(ev, f)
+	}
+	return strings.Join(parts, "|")
 }
 
 // fieldString returns an event field as a string. service/level are promoted

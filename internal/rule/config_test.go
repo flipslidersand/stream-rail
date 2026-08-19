@@ -100,8 +100,51 @@ rules:
 	if err != nil {
 		t.Fatalf("LoadFile: %v", err)
 	}
-	if rules[0].GroupBy != "host" {
-		t.Fatalf("group_by = %q, want host", rules[0].GroupBy)
+	if len(rules[0].GroupBy) != 1 || rules[0].GroupBy[0] != "host" {
+		t.Fatalf("group_by = %v, want [host]", rules[0].GroupBy)
+	}
+}
+
+func TestLoadFile_MultiGroupBy(t *testing.T) {
+	path := writeConfig(t, `
+rules:
+  - name: multi-group
+    group_by: [service, region]
+    aggregate: { func: count }
+    having: { gt: 1 }
+`)
+	rules, err := rule.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if len(rules[0].GroupBy) != 2 || rules[0].GroupBy[0] != "service" || rules[0].GroupBy[1] != "region" {
+		t.Fatalf("group_by = %v, want [service region]", rules[0].GroupBy)
+	}
+}
+
+func TestLoadFile_SingleGroupByNormalized(t *testing.T) {
+	// string and single-element array must produce identical []string.
+	pathStr := writeConfig(t, `
+rules:
+  - name: str
+    group_by: host
+    aggregate: { func: count }
+    having: { gt: 1 }
+`)
+	pathArr := writeConfig(t, `
+rules:
+  - name: arr
+    group_by: [host]
+    aggregate: { func: count }
+    having: { gt: 1 }
+`)
+	rStr, _ := rule.LoadFile(pathStr)
+	rArr, _ := rule.LoadFile(pathArr)
+	if len(rStr[0].GroupBy) != 1 || rStr[0].GroupBy[0] != "host" {
+		t.Fatalf("string form: %v", rStr[0].GroupBy)
+	}
+	if len(rArr[0].GroupBy) != 1 || rArr[0].GroupBy[0] != "host" {
+		t.Fatalf("array form: %v", rArr[0].GroupBy)
 	}
 }
 

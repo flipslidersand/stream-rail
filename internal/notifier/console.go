@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/flipslidersand/stream-rail/internal/aggregator"
 	"github.com/flipslidersand/stream-rail/internal/rule"
@@ -35,7 +36,7 @@ func (c *Console) Emit(r rule.Rule, res aggregator.Result) bool {
 		return false
 	}
 
-	groupBy := r.GroupBy
+	groupBy := strings.Join(r.GroupBy, "+")
 	if groupBy == "" {
 		groupBy = "group"
 	}
