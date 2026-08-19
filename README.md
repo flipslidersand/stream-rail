@@ -9,20 +9,21 @@ Flink / Kafka Streams のような重い基盤を使わず、**単一バイナ�
 - HTTP `POST /events` でイベント受信（チャネルフル時は backpressure）
 - NATS JetStream からの受信（at-least-once）
 - Tumbling Window（固定時間窓）での集計 — `COUNT` / `SUM`
-- ルール（`rules.yaml`）による `filter` → 集計 → `HAVING` 判定 → コンソール通知
+- ルール（`rules.yaml`）による `filter` → 任意フィールドの `group_by` → 集計 → `HAVING` 判定 → コンソール通知
+- ルールごとに異なる窓サイズと `group_by` を指定し、複数の集計ストリームへ fan-out
 - BadgerDB による窓状態の永続化（プロセス再起動で進行中の集計を resume）
-- Watermark（`max event ts − 許容遅延`）による窓クローズ + 遅延イベントの補正・再アラート
+- Watermark（`max event ts − 許容遅延`）による窓クローズ + 遅延イベントの補正・再アラート（BadgerDB 利用時は watermark も永続化）
+- NATS メッセージをすべての対象窓に取り込み、設定時は永続化した後に ACK
 
 ## 使用技術
 
 | 領域 | 技術 |
 |------|------|
-| 言語 | Go 1.22+ |
+| 言語 | Go 1.22 |
 | CLI | `spf13/cobra` |
 | 永続化 | `dgraph-io/badger/v4` |
 | メッセージング | `nats-io/nats.go`（JetStream） |
 | 設定 | `gopkg.in/yaml.v3` |
-| ログ | `go.uber.org/zap`（HTTP ingester） |
 
 ## ディレクトリ構成
 
@@ -36,7 +37,7 @@ internal/
   rule/              Rule / Filter / Having 型 + rules.yaml ローダー
   notifier/          HAVING 判定 + コンソール通知
   store/             BadgerDB による窓状態の永続化
-  engine/            各ステージの配線（window size 別 fan-out）
+  engine/            各ステージの配線（window size / group_by 別 fan-out）
 docs/                spec / data-model / tech-stack / ADR / 実装ガイド
 examples/rules.yaml  サンプルルール
 ```
@@ -122,16 +123,14 @@ NATS の end-to-end 確認は Docker が必要です（`docker run -p 4222:4222 
 
 ## 注意事項
 
-- `--data` を使う場合、窓状態の名前空間は窓サイズ（例 `10s` / `1m0s`）で分離されるため、**resume は同じ `--window` でのみ有効**です。
-- `group_by` は現状 `service` のみ対応（#17）。
-- watermark はプロセス跨ぎで永続化されません（#18）。
-- NATS の ACK は enqueue 時点（#19）。
+- `--data` を使う場合、窓状態と watermark の名前空間は窓サイズと `group_by`（例 `10s/service`）で分離されます。resume には同じ窓サイズと `group_by` が必要です。
+- 窓は tumbling window、通知先はコンソールのみ対応しています。
+- `filter` / `group_by` は `service`、`level`、またはイベントの `fields` 内のキーを指定できます。`SUM` の対象は `fields` 内の数値フィールドです。
 
 ## 今後の改善予定
 
-- [#17] `group_by` を任意フィールド対応にする
-- [#18] watermark を永続化しプロセス跨ぎで継続する
-- [#19] NATS ACK を集計/永続化後（end-to-end）にする
+- Sliding / Session Window の追加
+- コンソール以外の通知先の追加
 
 ## ライセンス
 
