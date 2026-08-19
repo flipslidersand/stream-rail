@@ -83,6 +83,46 @@ func TestBadger_CheckpointRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDedupeStore_SeenMark(t *testing.T) {
+	db := openTemp(t)
+	d := db.Seen()
+
+	if d.Seen("msg-1") {
+		t.Fatal("msg-1 should not be seen before Mark")
+	}
+	if err := d.Mark("msg-1", time.Minute); err != nil {
+		t.Fatalf("Mark: %v", err)
+	}
+	if !d.Seen("msg-1") {
+		t.Fatal("msg-1 should be seen after Mark")
+	}
+	// Different ID must remain unseen.
+	if d.Seen("msg-2") {
+		t.Fatal("msg-2 should not be seen")
+	}
+}
+
+func TestDedupeStore_IndependentOfBuckets(t *testing.T) {
+	db := openTemp(t)
+	start := time.Date(2024, 6, 10, 10, 0, 0, 0, time.UTC)
+
+	// Write a bucket and a seen entry; they should not interfere.
+	if err := db.Buckets("5m0s").Save(bucket("svc", start, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Seen().Mark("msg-abc", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+
+	buckets, _ := db.Buckets("5m0s").LoadAll()
+	if len(buckets) != 1 {
+		t.Fatalf("expected 1 bucket, got %d", len(buckets))
+	}
+	if !db.Seen().Seen("msg-abc") {
+		t.Fatal("seen entry lost after bucket write")
+	}
+}
+
 func TestBadger_CheckpointNamespacedByPrefix(t *testing.T) {
 	db := openTemp(t)
 	if err := db.Buckets("5m0s/service").SaveCheckpoint(100); err != nil {
