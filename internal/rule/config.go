@@ -8,6 +8,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// groupByYAML は group_by フィールドを string または []string どちらでも
+// 受け付けるカスタム型。単一文字列は要素数 1 のスライスに正規化する。
+type groupByYAML []string
+
+func (g *groupByYAML) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		*g = []string{value.Value}
+	case yaml.SequenceNode:
+		var fields []string
+		if err := value.Decode(&fields); err != nil {
+			return fmt.Errorf("group_by: %w", err)
+		}
+		*g = fields
+	default:
+		return fmt.Errorf("group_by must be a string or list of strings")
+	}
+	return nil
+}
+
 // yamlConfig mirrors the rules.yaml schema in docs/spec.md.
 type yamlConfig struct {
 	Rules []yamlRule `yaml:"rules"`
@@ -24,7 +44,7 @@ type yamlRule struct {
 		Field string `yaml:"field"`
 		Eq    string `yaml:"eq"`
 	} `yaml:"filter"`
-	GroupBy   string `yaml:"group_by"`
+	GroupBy   groupByYAML `yaml:"group_by"`
 	Aggregate struct {
 		Func  string `yaml:"func"`
 		Field string `yaml:"field"`
@@ -114,7 +134,7 @@ func (yr yamlRule) toRule() (Rule, error) {
 	return Rule{
 		Name:       yr.Name,
 		Filter:     Filter{Field: yr.Filter.Field, Eq: yr.Filter.Eq},
-		GroupBy:    yr.GroupBy,
+		GroupBy:    []string(yr.GroupBy),
 		AggFunc:    yr.Aggregate.Func,
 		AggField:   yr.Aggregate.Field,
 		Having:     having,

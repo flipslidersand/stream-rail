@@ -136,7 +136,7 @@ func loadRules(configPath string, threshold float64) ([]rule.Rule, error) {
 	return []rule.Rule{{
 		Name:    "error-spike",
 		Filter:  rule.Filter{Field: "level", Eq: "ERROR"},
-		GroupBy: "service",
+		GroupBy: []string{"service"},
 		AggFunc: rule.AggCount,
 		Having:  rule.Having{Op: rule.OpGT, Value: threshold},
 		Emit:    "console",

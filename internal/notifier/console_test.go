@@ -24,7 +24,7 @@ func result(value float64) aggregator.Result {
 
 var errorSpike = rule.Rule{
 	Name:    "error-spike",
-	GroupBy: "service",
+	GroupBy: []string{"service"},
 	AggFunc: rule.AggCount,
 	Having:  rule.Having{Op: rule.OpGT, Value: 20},
 }

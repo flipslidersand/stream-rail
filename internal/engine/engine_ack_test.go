@@ -36,8 +36,8 @@ func TestEngine_AcksOnceAcrossManagers(t *testing.T) {
 	in := make(chan model.Envelope, 1)
 	// Two distinct window sizes → two managers → the event is added twice.
 	rules := []rule.Rule{
-		{Name: "r-fast", GroupBy: "service", AggFunc: rule.AggCount, Having: rule.Having{Op: rule.OpGT, Value: 0}, WindowSize: 40 * time.Millisecond},
-		{Name: "r-slow", GroupBy: "service", AggFunc: rule.AggCount, Having: rule.Having{Op: rule.OpGT, Value: 0}, WindowSize: 90 * time.Millisecond},
+		{Name: "r-fast", GroupBy: []string{"service"}, AggFunc: rule.AggCount, Having: rule.Having{Op: rule.OpGT, Value: 0}, WindowSize: 40 * time.Millisecond},
+		{Name: "r-slow", GroupBy: []string{"service"}, AggFunc: rule.AggCount, Having: rule.Having{Op: rule.OpGT, Value: 0}, WindowSize: 90 * time.Millisecond},
 	}
 	eng := New(in, time.Minute, rules, io.Discard, nil)
 

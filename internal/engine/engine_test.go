@@ -13,11 +13,17 @@ import (
 )
 
 func TestNormalizeGroupBy(t *testing.T) {
-	if got := normalizeGroupBy(""); got != "service" {
-		t.Errorf("normalizeGroupBy(\"\") = %q, want service", got)
+	if got := normalizeGroupBy(nil); got != "service" {
+		t.Errorf("normalizeGroupBy(nil) = %q, want service", got)
 	}
-	if got := normalizeGroupBy("host"); got != "host" {
-		t.Errorf("normalizeGroupBy(host) = %q, want host", got)
+	if got := normalizeGroupBy([]string{}); got != "service" {
+		t.Errorf("normalizeGroupBy([]) = %q, want service", got)
+	}
+	if got := normalizeGroupBy([]string{"host"}); got != "host" {
+		t.Errorf("normalizeGroupBy([host]) = %q, want host", got)
+	}
+	if got := normalizeGroupBy([]string{"service", "region"}); got != "service|region" {
+		t.Errorf("normalizeGroupBy([service,region]) = %q, want service|region", got)
 	}
 }
 
@@ -33,18 +39,22 @@ func TestStreamKeyNamespace(t *testing.T) {
 }
 
 func TestGroupFuncFor(t *testing.T) {
-	ev := model.Event{Service: "api", Level: "ERROR", Fields: map[string]any{"host": "h1"}}
-	if got := groupFuncFor("service")(ev); got != "api" {
+	ev := model.Event{Service: "api", Level: "ERROR", Fields: map[string]any{"host": "h1", "region": "us"}}
+	if got := groupFuncFor([]string{"service"})(ev); got != "api" {
 		t.Errorf("group by service = %q, want api", got)
 	}
-	if got := groupFuncFor("level")(ev); got != "ERROR" {
+	if got := groupFuncFor([]string{"level"})(ev); got != "ERROR" {
 		t.Errorf("group by level = %q, want ERROR", got)
 	}
-	if got := groupFuncFor("host")(ev); got != "h1" {
+	if got := groupFuncFor([]string{"host"})(ev); got != "h1" {
 		t.Errorf("group by host = %q, want h1", got)
 	}
-	if got := groupFuncFor("")(ev); got != "api" {
+	if got := groupFuncFor(nil)(ev); got != "api" {
 		t.Errorf("empty group_by should default to service, got %q", got)
+	}
+	// Multi-field composite key.
+	if got := groupFuncFor([]string{"service", "region"})(ev); got != "api|us" {
+		t.Errorf("group by service+region = %q, want api|us", got)
 	}
 }
 
@@ -75,7 +85,7 @@ func TestEngine_GroupsByArbitraryField(t *testing.T) {
 
 	rules := []rule.Rule{{
 		Name:       "host-spike",
-		GroupBy:    "host",
+		GroupBy:    []string{"host"},
 		AggFunc:    rule.AggCount,
 		Having:     rule.Having{Op: rule.OpGT, Value: 1},
 		Emit:       "console",
