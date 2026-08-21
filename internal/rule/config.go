@@ -112,12 +112,12 @@ func (yr yamlRule) toRule() (Rule, error) {
 	// Aggregate.
 	switch yr.Aggregate.Func {
 	case AggCount:
-	case AggSum:
+	case AggSum, AggMax, AggMin, AggAvg:
 		if yr.Aggregate.Field == "" {
-			return Rule{}, fmt.Errorf("aggregate.field is required for sum")
+			return Rule{}, fmt.Errorf("aggregate.field is required for %s", yr.Aggregate.Func)
 		}
 	default:
-		return Rule{}, fmt.Errorf("unsupported aggregate.func %q (count|sum)", yr.Aggregate.Func)
+		return Rule{}, fmt.Errorf("unsupported aggregate.func %q (count|sum|max|min|avg)", yr.Aggregate.Func)
 	}
 
 	// Having: exactly one operator key.

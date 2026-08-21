@@ -17,6 +17,9 @@ import (
 const (
 	AggCount = "count"
 	AggSum   = "sum"
+	AggMax   = "max"
+	AggMin   = "min"
+	AggAvg   = "avg"
 )
 
 // HAVING comparison operators.

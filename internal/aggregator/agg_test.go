@@ -63,3 +63,67 @@ func TestAggregate_NoFilterCountsAll(t *testing.T) {
 		t.Fatalf("value=%g, want 2", res.Value)
 	}
 }
+
+func TestAggregate_Max(t *testing.T) {
+	b := batch(
+		model.Event{Service: "api", Level: "ERROR", Fields: map[string]any{"latency_ms": float64(300)}},
+		model.Event{Service: "api", Level: "ERROR", Fields: map[string]any{"latency_ms": float64(800)}},
+		model.Event{Service: "api", Level: "INFO", Fields: map[string]any{"latency_ms": float64(999)}}, // filtered
+	)
+	r := rule.Rule{
+		Filter:   rule.Filter{Field: "level", Eq: "ERROR"},
+		AggFunc:  rule.AggMax,
+		AggField: "latency_ms",
+	}
+	res := aggregator.Aggregate(b, r)
+	if res.Value != 800 || res.Count != 2 {
+		t.Fatalf("max=%g count=%d, want 800/2", res.Value, res.Count)
+	}
+}
+
+func TestAggregate_Min(t *testing.T) {
+	b := batch(
+		model.Event{Service: "api", Level: "ERROR", Fields: map[string]any{"latency_ms": float64(300)}},
+		model.Event{Service: "api", Level: "ERROR", Fields: map[string]any{"latency_ms": float64(800)}},
+		model.Event{Service: "api", Level: "INFO", Fields: map[string]any{"latency_ms": float64(1)}}, // filtered
+	)
+	r := rule.Rule{
+		Filter:   rule.Filter{Field: "level", Eq: "ERROR"},
+		AggFunc:  rule.AggMin,
+		AggField: "latency_ms",
+	}
+	res := aggregator.Aggregate(b, r)
+	if res.Value != 300 || res.Count != 2 {
+		t.Fatalf("min=%g count=%d, want 300/2", res.Value, res.Count)
+	}
+}
+
+func TestAggregate_Avg(t *testing.T) {
+	b := batch(
+		model.Event{Service: "api", Level: "ERROR", Fields: map[string]any{"latency_ms": float64(200)}},
+		model.Event{Service: "api", Level: "ERROR", Fields: map[string]any{"latency_ms": float64(400)}},
+		model.Event{Service: "api", Level: "INFO", Fields: map[string]any{"latency_ms": float64(999)}}, // filtered
+	)
+	r := rule.Rule{
+		Filter:   rule.Filter{Field: "level", Eq: "ERROR"},
+		AggFunc:  rule.AggAvg,
+		AggField: "latency_ms",
+	}
+	res := aggregator.Aggregate(b, r)
+	if res.Value != 300 || res.Count != 2 {
+		t.Fatalf("avg=%g count=%d, want 300/2", res.Value, res.Count)
+	}
+}
+
+func TestAggregate_MaxNoMatchingEvents(t *testing.T) {
+	b := batch(model.Event{Service: "api", Level: "INFO"})
+	r := rule.Rule{
+		Filter:   rule.Filter{Field: "level", Eq: "ERROR"},
+		AggFunc:  rule.AggMax,
+		AggField: "latency_ms",
+	}
+	res := aggregator.Aggregate(b, r)
+	if res.Count != 0 || res.Value != 0 {
+		t.Fatalf("expected zero result for no matching events, got count=%d value=%g", res.Count, res.Value)
+	}
+}
