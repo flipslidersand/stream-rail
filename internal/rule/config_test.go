@@ -166,3 +166,62 @@ func TestLoadFile_EmptyRules(t *testing.T) {
 		t.Fatal("expected error for empty rules")
 	}
 }
+
+func TestLoadConfig_WithWebhookNotify(t *testing.T) {
+	path := writeConfig(t, `
+rules:
+  - name: error-spike
+    aggregate: { func: count }
+    having: { gt: 1 }
+notify:
+  - type: console
+  - type: webhook
+    url: https://hooks.example.com/abc
+    headers:
+      Content-Type: application/json
+    template: '{"text":"{{.RuleName}}"}'
+`)
+	cfg, err := rule.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("got %d rules, want 1", len(cfg.Rules))
+	}
+	if len(cfg.Notify) != 2 {
+		t.Fatalf("got %d notify entries, want 2", len(cfg.Notify))
+	}
+	wh := cfg.Notify[1]
+	if wh.Type != "webhook" || wh.URL != "https://hooks.example.com/abc" {
+		t.Errorf("notify[1] = %+v", wh)
+	}
+}
+
+func TestLoadConfig_WebhookMissingURL(t *testing.T) {
+	path := writeConfig(t, `
+rules:
+  - name: r
+    aggregate: { func: count }
+    having: { gt: 1 }
+notify:
+  - type: webhook
+`)
+	if _, err := rule.LoadConfig(path); err == nil {
+		t.Fatal("expected error for webhook without url")
+	}
+}
+
+func TestLoadConfig_UnknownNotifyType(t *testing.T) {
+	path := writeConfig(t, `
+rules:
+  - name: r
+    aggregate: { func: count }
+    having: { gt: 1 }
+notify:
+  - type: slack
+    url: https://example.com
+`)
+	if _, err := rule.LoadConfig(path); err == nil {
+		t.Fatal("expected error for unknown notify type")
+	}
+}

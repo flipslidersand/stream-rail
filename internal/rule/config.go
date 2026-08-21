@@ -28,9 +28,24 @@ func (g *groupByYAML) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// Config is the fully-parsed representation of rules.yaml.
+type Config struct {
+	Rules  []Rule
+	Notify []NotifyConfig
+}
+
 // yamlConfig mirrors the rules.yaml schema in docs/spec.md.
 type yamlConfig struct {
-	Rules []yamlRule `yaml:"rules"`
+	Rules  []yamlRule   `yaml:"rules"`
+	Notify []yamlNotify `yaml:"notify"`
+}
+
+type yamlNotify struct {
+	Type     string            `yaml:"type"`
+	URL      string            `yaml:"url"`
+	Method   string            `yaml:"method"`
+	Headers  map[string]string `yaml:"headers"`
+	Template string            `yaml:"template"`
 }
 
 type yamlRule struct {
@@ -53,13 +68,13 @@ type yamlRule struct {
 	Emit   string             `yaml:"emit"`
 }
 
-// LoadFile reads and validates rules.yaml, returning the parsed rules.
-// Unknown fields and semantic errors fail fast so misconfiguration is caught
-// at startup rather than silently ignored.
-func LoadFile(path string) ([]Rule, error) {
+// LoadConfig reads and validates rules.yaml, returning both the parsed rules
+// and the optional notify sink list. Unknown fields and semantic errors fail
+// fast so misconfiguration is caught at startup rather than silently ignored.
+func LoadConfig(path string) (Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open config: %w", err)
+		return Config{}, fmt.Errorf("open config: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -68,21 +83,42 @@ func LoadFile(path string) ([]Rule, error) {
 
 	var cfg yamlConfig
 	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
 	if len(cfg.Rules) == 0 {
-		return nil, fmt.Errorf("config %s defines no rules", path)
+		return Config{}, fmt.Errorf("config %s defines no rules", path)
 	}
 
 	rules := make([]Rule, 0, len(cfg.Rules))
 	for i, yr := range cfg.Rules {
 		r, err := yr.toRule()
 		if err != nil {
-			return nil, fmt.Errorf("rule[%d] %q: %w", i, yr.Name, err)
+			return Config{}, fmt.Errorf("rule[%d] %q: %w", i, yr.Name, err)
 		}
 		rules = append(rules, r)
 	}
-	return rules, nil
+
+	notify := make([]NotifyConfig, 0, len(cfg.Notify))
+	for i, yn := range cfg.Notify {
+		nc, err := yn.toNotifyConfig()
+		if err != nil {
+			return Config{}, fmt.Errorf("notify[%d]: %w", i, err)
+		}
+		notify = append(notify, nc)
+	}
+
+	return Config{Rules: rules, Notify: notify}, nil
+}
+
+// LoadFile reads and validates rules.yaml, returning only the parsed rules.
+// It is a convenience wrapper around LoadConfig for callers that do not need
+// the notify sink configuration.
+func LoadFile(path string) ([]Rule, error) {
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	return cfg.Rules, nil
 }
 
 func (yr yamlRule) toRule() (Rule, error) {
@@ -140,6 +176,25 @@ func (yr yamlRule) toRule() (Rule, error) {
 		Having:     having,
 		Emit:       yr.Emit,
 		WindowSize: size,
+	}, nil
+}
+
+func (yn yamlNotify) toNotifyConfig() (NotifyConfig, error) {
+	switch yn.Type {
+	case "console":
+	case "webhook":
+		if yn.URL == "" {
+			return NotifyConfig{}, fmt.Errorf("webhook notify requires url")
+		}
+	default:
+		return NotifyConfig{}, fmt.Errorf("unsupported notify type %q (console|webhook)", yn.Type)
+	}
+	return NotifyConfig{
+		Type:     yn.Type,
+		URL:      yn.URL,
+		Method:   yn.Method,
+		Headers:  yn.Headers,
+		Template: yn.Template,
 	}, nil
 }
 
