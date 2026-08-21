@@ -45,14 +45,15 @@ type Having struct {
 
 // Rule is a single alerting rule.
 type Rule struct {
-	Name       string
-	Filter     Filter
-	GroupBy    []string // one or more fields; empty defaults to ["service"]
-	AggFunc    string   // AggCount | AggSum
-	AggField   string   // numeric field name, required for AggSum
-	Having     Having
-	Emit       string        // "console" for Phase 3
-	WindowSize time.Duration // tumbling window size; 0 = engine default
+	Name        string
+	Filter      Filter
+	GroupBy     []string // one or more fields; empty defaults to ["service"]
+	AggFunc     string   // AggCount | AggSum | AggMax | AggMin | AggAvg
+	AggField    string   // numeric field name, required for sum/max/min/avg
+	Having      Having
+	Emit        string        // "console" for Phase 3
+	WindowSize  time.Duration // tumbling window size; 0 = engine default
+	WindowSlide time.Duration // > 0 → sliding window with this slide interval
 }
 
 // NotifyConfig holds the parsed representation of one entry in the top-level

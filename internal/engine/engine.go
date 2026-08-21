@@ -69,16 +69,15 @@ func (e *Engine) WithMetrics(m *metrics.Metrics) *Engine {
 	return e
 }
 
-// streamKey identifies one window Manager: rules sharing both a window size and
-// a group_by field are served by the same Manager so their GroupKeys line up.
+// streamKey identifies one window Manager: rules sharing the same window size,
+// slide interval, and group_by field are served by the same Manager.
 type streamKey struct {
 	size    time.Duration
+	slide   time.Duration // 0 = tumbling; > 0 = sliding
 	groupBy string
 }
 
-// namespace is the persistence prefix for this stream. It includes the group_by
-// field so managers of the same size but different grouping don't collide in the
-// store.
+// namespace is the persistence prefix for this stream (tumbling only).
 func (k streamKey) namespace() string { return k.size.String() + "/" + k.groupBy }
 
 // normalizeGroupBy returns a canonical group_by key string for use as a map key
@@ -122,7 +121,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		if size <= 0 {
 			size = e.defaultWindow
 		}
-		gk := streamKey{size: size, groupBy: normalizeGroupBy(r.GroupBy)}
+		gk := streamKey{size: size, slide: r.WindowSlide, groupBy: normalizeGroupBy(r.GroupBy)}
 		byGroup[gk] = append(byGroup[gk], r)
 	}
 
@@ -133,7 +132,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		if size <= 0 {
 			size = e.defaultWindow
 		}
-		gk := streamKey{size: size, groupBy: normalizeGroupBy(r.GroupBy)}
+		gk := streamKey{size: size, slide: r.WindowSlide, groupBy: normalizeGroupBy(r.GroupBy)}
 		if _, ok := groupFields[gk]; !ok {
 			groupFields[gk] = r.GroupBy
 		}
@@ -145,20 +144,27 @@ func (e *Engine) Run(ctx context.Context) error {
 	for gk, rules := range byGroup {
 		in := make(chan model.Envelope, 1024)
 		out := make(chan window.Batch, window.DefaultBatchBuffer)
-		mgr := window.NewManager(gk.size, in, out, groupFuncFor(groupFields[gk]), nil)
-		mgr.SetLateness(e.lateness)
 		rules := rules // capture per iteration
 
-		if e.store != nil {
-			mgr.SetStore(e.store.Buckets(gk.namespace()))
-			if n, err := mgr.Restore(); err != nil {
-				return fmt.Errorf("restore windows (%s): %w", gk.namespace(), err)
-			} else if n > 0 {
-				fmt.Printf("[store] restored %d open window(s) for %s\n", n, gk.namespace())
+		var runFn func(context.Context) error
+		if gk.slide > 0 {
+			smgr := window.NewSlidingManager(gk.size, gk.slide, in, out, groupFuncFor(groupFields[gk]), nil)
+			runFn = smgr.Run
+		} else {
+			mgr := window.NewManager(gk.size, in, out, groupFuncFor(groupFields[gk]), nil)
+			mgr.SetLateness(e.lateness)
+			if e.store != nil {
+				mgr.SetStore(e.store.Buckets(gk.namespace()))
+				if n, err := mgr.Restore(); err != nil {
+					return fmt.Errorf("restore windows (%s): %w", gk.namespace(), err)
+				} else if n > 0 {
+					fmt.Printf("[store] restored %d open window(s) for %s\n", n, gk.namespace())
+				}
 			}
+			runFn = mgr.Run
 		}
 
-		go func() { _ = mgr.Run(ctx) }()
+		go func() { _ = runFn(ctx) }()
 		go func() {
 			for {
 				select {
