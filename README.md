@@ -24,6 +24,8 @@ Flink / Kafka Streams のような重い基盤を使わず、**単一バイナ�
 | 永続化 | `dgraph-io/badger/v4` |
 | メッセージング | `nats-io/nats.go`（JetStream） |
 | 設定 | `gopkg.in/yaml.v3` |
+| ログ | `go.uber.org/zap`（HTTP ingester） |
+| メトリクス | `prometheus/client_golang` |
 
 ## ディレクトリ構成
 
@@ -95,6 +97,28 @@ go run ./cmd/streamrail run --window 10s --lateness 30s --threshold 20
 # [ALERT] ... count=22 > 20 (corrected)
 ```
 
+### 複数フィールドで group_by（rules.yaml）
+
+```yaml
+rules:
+  - name: error-by-service-region
+    filter: {field: level, op: eq, value: ERROR}
+    window: {size: 10s}
+    aggregate: {func: COUNT, field: level}
+    group_by: [service, region]
+    having: {op: gt, value: 5}
+```
+
+### Prometheus メトリクス
+
+```bash
+go run ./cmd/streamrail run --metrics-addr :9090
+# 別ターミナル
+curl http://localhost:9090/metrics
+# streamrail_events_received_total, streamrail_events_dropped_total,
+# streamrail_windows_closed_total, streamrail_alerts_fired_total
+```
+
 ## 主なフラグ
 
 | フラグ | デフォルト | 説明 |
@@ -106,7 +130,9 @@ go run ./cmd/streamrail run --window 10s --lateness 30s --threshold 20
 | `--data` | （空） | BadgerDB ディレクトリ（空=インメモリ） |
 | `--nats` | （空） | NATS サーバ URL（空=HTTP のみ） |
 | `--nats-subject` | `application_logs` | JetStream の subject/stream |
+| `--nats-dedupe-ttl` | `24h` | NATS 再配信 dedupe の TTL |
 | `--lateness` | `0` | 遅延イベント補正の許容遅延（0=無効） |
+| `--metrics-addr` | （空） | Prometheus `/metrics` のリッスンアドレス（空=無効） |
 
 ## テスト
 
