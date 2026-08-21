@@ -55,6 +55,16 @@ type Rule struct {
 	WindowSize time.Duration // tumbling window size; 0 = engine default
 }
 
+// NotifyConfig holds the parsed representation of one entry in the top-level
+// notify list. The engine or cmd layer converts this into a notifier.Notifier.
+type NotifyConfig struct {
+	Type     string            // "console" | "webhook"
+	URL      string            // webhook only
+	Method   string            // webhook only; defaults to POST
+	Headers  map[string]string // webhook only
+	Template string            // webhook only; empty = default JSON template
+}
+
 // Match reports whether ev passes the rule's filter.
 func (r Rule) Match(ev model.Event) bool {
 	if r.Filter.Field == "" {

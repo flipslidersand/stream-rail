@@ -17,6 +17,7 @@ import (
 	"github.com/flipslidersand/stream-rail/internal/ingester"
 	"github.com/flipslidersand/stream-rail/internal/metrics"
 	"github.com/flipslidersand/stream-rail/internal/model"
+	"github.com/flipslidersand/stream-rail/internal/notifier"
 	"github.com/flipslidersand/stream-rail/internal/rule"
 	"github.com/flipslidersand/stream-rail/internal/store"
 	"github.com/flipslidersand/stream-rail/internal/window"
@@ -68,7 +69,7 @@ func main() {
 }
 
 func runServer(cfg runConfig) error {
-	rules, err := loadRules(cfg.configPath, cfg.threshold)
+	rules, notifiers, err := loadRules(cfg.configPath, cfg.threshold)
 	if err != nil {
 		return err
 	}
@@ -110,6 +111,9 @@ func runServer(cfg runConfig) error {
 	}
 
 	eng := engine.New(ch, cfg.windowSize, rules, nil, storeFactory).WithLateness(cfg.lateness)
+	if len(notifiers) > 0 {
+		eng.WithNotifiers(notifiers)
+	}
 	if m != nil {
 		eng.WithMetrics(m)
 	}
@@ -154,16 +158,20 @@ func runServer(cfg runConfig) error {
 	return nil
 }
 
-// loadRules returns rules from configPath, or the built-in error-spike rule
-// when configPath is empty.
-func loadRules(configPath string, threshold float64) ([]rule.Rule, error) {
+// loadRules returns rules and notifiers from configPath, or the built-in
+// error-spike rule (with a console notifier) when configPath is empty.
+func loadRules(configPath string, threshold float64) ([]rule.Rule, []notifier.Notifier, error) {
 	if configPath != "" {
-		rules, err := rule.LoadFile(configPath)
+		cfg, err := rule.LoadConfig(configPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		fmt.Printf("loaded %d rule(s) from %s\n", len(rules), configPath)
-		return rules, nil
+		fmt.Printf("loaded %d rule(s) from %s\n", len(cfg.Rules), configPath)
+		ns, err := buildNotifiers(cfg.Notify)
+		if err != nil {
+			return nil, nil, err
+		}
+		return cfg.Rules, ns, nil
 	}
 	return []rule.Rule{{
 		Name:    "error-spike",
@@ -172,5 +180,27 @@ func loadRules(configPath string, threshold float64) ([]rule.Rule, error) {
 		AggFunc: rule.AggCount,
 		Having:  rule.Having{Op: rule.OpGT, Value: threshold},
 		Emit:    "console",
-	}}, nil
+	}}, nil, nil
+}
+
+// buildNotifiers converts a list of NotifyConfig into concrete Notifier instances.
+// An empty list returns nil, causing the engine to keep its default console notifier.
+func buildNotifiers(ncs []rule.NotifyConfig) ([]notifier.Notifier, error) {
+	if len(ncs) == 0 {
+		return nil, nil
+	}
+	ns := make([]notifier.Notifier, 0, len(ncs))
+	for _, nc := range ncs {
+		switch nc.Type {
+		case "console":
+			ns = append(ns, notifier.NewConsole(nil))
+		case "webhook":
+			wh, err := notifier.NewWebhook(nc.URL, nc.Method, nc.Headers, nc.Template)
+			if err != nil {
+				return nil, fmt.Errorf("webhook notifier: %w", err)
+			}
+			ns = append(ns, wh)
+		}
+	}
+	return ns, nil
 }

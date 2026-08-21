@@ -17,7 +17,7 @@ import (
 )
 
 // Engine wires the pipeline stages together: ingestion → tumbling window →
-// aggregate → HAVING evaluation → console notification.
+// aggregate → HAVING evaluation → alert notification.
 //
 // Rules may declare different window sizes and group-by fields, so the engine
 // runs one window Manager per distinct (window size, group_by) combination and
@@ -28,14 +28,15 @@ type Engine struct {
 	defaultWindow time.Duration
 	lateness      time.Duration
 	rules         []rule.Rule
-	console       *notifier.Console
+	notifiers     []notifier.Notifier
 	store         window.StoreFactory // optional; nil disables persistence
 	metrics       *metrics.Metrics   // optional; nil disables instrumentation
 }
 
 // New builds an Engine reading from in. defaultWindow is applied to rules that
 // don't declare their own window size (defaults to 5 minutes). out receives
-// alert output (nil = os.Stdout). store may be nil to disable persistence.
+// alert output for the default console notifier (nil = os.Stdout). store may
+// be nil to disable persistence.
 func New(in <-chan model.Envelope, defaultWindow time.Duration, rules []rule.Rule, out io.Writer, store window.StoreFactory) *Engine {
 	if defaultWindow <= 0 {
 		defaultWindow = 5 * time.Minute
@@ -44,9 +45,16 @@ func New(in <-chan model.Envelope, defaultWindow time.Duration, rules []rule.Rul
 		in:            in,
 		defaultWindow: defaultWindow,
 		rules:         rules,
-		console:       notifier.NewConsole(out),
+		notifiers:     []notifier.Notifier{notifier.NewConsole(out)},
 		store:         store,
 	}
+}
+
+// WithNotifiers replaces the default console notifier with the given list.
+// Call before Run. An empty slice disables all alert output.
+func (e *Engine) WithNotifiers(ns []notifier.Notifier) *Engine {
+	e.notifiers = ns
+	return e
 }
 
 // WithLateness sets the allowed lateness for late-event correction (Phase 6).
@@ -188,7 +196,9 @@ func (e *Engine) Run(ctx context.Context) error {
 			}
 			for _, r := range tb.rules {
 				res := aggregator.Aggregate(tb.batch, r)
-				e.console.Emit(r, res)
+				for _, n := range e.notifiers {
+					n.Emit(r, res)
+				}
 			}
 		}
 	}
