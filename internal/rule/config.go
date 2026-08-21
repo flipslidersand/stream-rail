@@ -52,8 +52,9 @@ type yamlRule struct {
 	Name   string `yaml:"name"`
 	Source string `yaml:"source"`
 	Window struct {
-		Type string `yaml:"type"`
-		Size string `yaml:"size"`
+		Type  string `yaml:"type"`
+		Size  string `yaml:"size"`
+		Slide string `yaml:"slide"`
 	} `yaml:"window"`
 	Filter struct {
 		Field string `yaml:"field"`
@@ -126,9 +127,9 @@ func (yr yamlRule) toRule() (Rule, error) {
 		return Rule{}, fmt.Errorf("name is required")
 	}
 
-	// Window: only tumbling is supported today (see ADR-002).
-	if yr.Window.Type != "" && yr.Window.Type != "tumbling" {
-		return Rule{}, fmt.Errorf("unsupported window.type %q (only tumbling)", yr.Window.Type)
+	// Window type: tumbling (default) or sliding.
+	if yr.Window.Type != "" && yr.Window.Type != "tumbling" && yr.Window.Type != "sliding" {
+		return Rule{}, fmt.Errorf("unsupported window.type %q (tumbling|sliding)", yr.Window.Type)
 	}
 	var size time.Duration
 	if yr.Window.Size != "" {
@@ -140,6 +141,26 @@ func (yr yamlRule) toRule() (Rule, error) {
 			return Rule{}, fmt.Errorf("window.size must be positive, got %s", yr.Window.Size)
 		}
 		size = d
+	}
+	var slide time.Duration
+	if yr.Window.Type == "sliding" {
+		if yr.Window.Slide == "" {
+			return Rule{}, fmt.Errorf("window.slide is required for sliding windows")
+		}
+		d, err := time.ParseDuration(yr.Window.Slide)
+		if err != nil {
+			return Rule{}, fmt.Errorf("invalid window.slide %q: %w", yr.Window.Slide, err)
+		}
+		if d <= 0 {
+			return Rule{}, fmt.Errorf("window.slide must be positive, got %s", yr.Window.Slide)
+		}
+		if size > 0 && size%d != 0 {
+			return Rule{}, fmt.Errorf("window.size (%s) must be divisible by window.slide (%s)", size, d)
+		}
+		if size > 0 && d > size {
+			return Rule{}, fmt.Errorf("window.slide (%s) must be <= window.size (%s)", d, size)
+		}
+		slide = d
 	}
 
 	// Grouping: any field is allowed (service/level or a Fields key). The engine
@@ -168,14 +189,15 @@ func (yr yamlRule) toRule() (Rule, error) {
 	}
 
 	return Rule{
-		Name:       yr.Name,
-		Filter:     Filter{Field: yr.Filter.Field, Eq: yr.Filter.Eq},
-		GroupBy:    []string(yr.GroupBy),
-		AggFunc:    yr.Aggregate.Func,
-		AggField:   yr.Aggregate.Field,
-		Having:     having,
-		Emit:       yr.Emit,
-		WindowSize: size,
+		Name:        yr.Name,
+		Filter:      Filter{Field: yr.Filter.Field, Eq: yr.Filter.Eq},
+		GroupBy:     []string(yr.GroupBy),
+		AggFunc:     yr.Aggregate.Func,
+		AggField:    yr.Aggregate.Field,
+		Having:      having,
+		Emit:        yr.Emit,
+		WindowSize:  size,
+		WindowSlide: slide,
 	}, nil
 }
 
