@@ -1,5 +1,7 @@
 # StreamRail
 
+[![CI](https://github.com/flipslidersand/stream-rail/actions/workflows/ci.yml/badge.svg)](https://github.com/flipslidersand/stream-rail/actions/workflows/ci.yml)
+
 A lightweight stream processing engine that ingests events via HTTP / NATS, aggregates them in fixed time windows, evaluates conditions, and fires alerts.
 Built to explore goroutines, channels, backpressure, window processing, and watermarks in Go.
 
