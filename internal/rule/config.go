@@ -211,13 +211,7 @@ func (yn yamlNotify) toNotifyConfig() (NotifyConfig, error) {
 	default:
 		return NotifyConfig{}, fmt.Errorf("unsupported notify type %q (console|webhook)", yn.Type)
 	}
-	return NotifyConfig{
-		Type:     yn.Type,
-		URL:      yn.URL,
-		Method:   yn.Method,
-		Headers:  yn.Headers,
-		Template: yn.Template,
-	}, nil
+	return NotifyConfig(yn), nil
 }
 
 func parseHaving(m map[string]float64) (Having, error) {
