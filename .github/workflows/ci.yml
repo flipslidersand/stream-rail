@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ${{ vars.GATE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -17,7 +17,7 @@ jobs:
       - run: go test -race ./...
 
   lint:
-    runs-on: ${{ vars.GATE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
