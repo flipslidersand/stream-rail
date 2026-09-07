@@ -74,7 +74,7 @@ func TestHTTPIngester_RejectsNonPost(t *testing.T) {
 }
 
 func TestHTTPIngester_FullChannelReturns503(t *testing.T) {
-	ch := make(chan model.Envelope, 0) // unbuffered = full immediately
+	ch := make(chan model.Envelope) // unbuffered = full immediately
 	handler := ingester.NewHTTPIngester(ch)
 
 	body := `{"service":"x","level":"INFO","ts":1}`
