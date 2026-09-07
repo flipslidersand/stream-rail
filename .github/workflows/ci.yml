@@ -12,6 +12,7 @@ jobs:
     with:
       go-version: "1.25"
       coverage-threshold: 65
+      runner: ubuntu-latest
 
   reviewdog:
     permissions:
