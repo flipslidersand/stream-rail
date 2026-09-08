@@ -22,3 +22,8 @@ jobs:
     uses: flipslidersand-labs/qa-workflows/.github/workflows/reviewdog-go.yml@main
     with:
       go-version: "1.25"
+
+  gitleaks:
+    permissions:
+      contents: read
+    uses: flipslidersand-labs/qa-workflows/.github/workflows/gitleaks.yml@main
